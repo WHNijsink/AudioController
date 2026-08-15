@@ -193,11 +193,15 @@ $(function() {
 		$cookie[$line[0]] = $line[1];
 	}
 
-	if( 'labels' in $cookie ){
-		if( $cookie.labels == 'true' ){
+	if( 'camera_app_labels' in $cookie ){
+		if( $cookie.camera_app_labels == 'true' ){
 			$('.toggleLabels').attr('checked',true);
 			$('#presets ul li').removeClass('basic');
 		}
+	}
+	if( 'camera_app_audio' in $cookie ){
+		$('.toggleAudio').attr('checked', ($cookie.camera_app_audio == 'true') );
+		toggleAudio();
 	}
 
 	/*
@@ -206,10 +210,10 @@ $(function() {
 	$('.toggleLabels').click(function(){
 		if( $(this).is(':checked') ){
 			$('#presets ul li').removeClass('basic');
-			document.cookie = "labels=true;max-age=2628000"; //max-age = 1 month
+			document.cookie = "camera_app_labels=true;max-age=2628000"; //max-age = 1 month
 		} else {
 			$('#presets ul li').addClass('basic');
-			document.cookie = "labels=false;max-age=2628000"; //max-age = 1 month
+			document.cookie = "camera_app_labels=false;max-age=2628000"; //max-age = 1 month
 		}
 	});
 
@@ -271,17 +275,24 @@ $(function() {
 	});
 
 	/*
-	 * toggle voice
+	 * toggleAudio
 	 */
-	$('.toggleVoice').click(function(){
-		if( $(this).is(':checked') ){
-			$video = document.getElementById("preview");
+	$('.toggleAudio').click(function(){
+		toggleAudio();
+	});
+
+	function toggleAudio(){
+		$video = document.getElementById("preview");
+		if( $('.toggleAudio').is(':checked') ){
 			$video.muted = false;
 			$('#preview').removeAttr("muted");
+			document.cookie = "camera_app_audio=true;max-age=2628000"; //max-age = 1 month
 		} else {
 			$video.muted = true;
+			$('#preview').attr("muted", "");
+			document.cookie = "camera_app_audio=false;max-age=2628000"; //max-age = 1 month
 		}
-	});
+	}
 
 	/*
 	 * reboot
