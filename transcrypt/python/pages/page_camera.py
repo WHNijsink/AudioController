@@ -107,14 +107,17 @@ class Page(ElementWrapper):
 
             # set cams.active button
             for btn in div_cams.element.querySelectorAll("button"):
-                btn.classList.remove("active")
+                btn.classList.add("btn-primary")
+                btn.classList.remove("btn-success")
 
             if evt:
                 self.camid = int(evt.currentTarget.value)
-                evt.currentTarget.classList.add("active")            
+                evt.currentTarget.classList.remove("btn-primary")
+                evt.currentTarget.classList.add("btn-success")
             else:
                 btn = div_cams.element.querySelector("button")
-                btn.classList.add("active")
+                btn.classList.remove("btn-primary")
+                btn.classList.add("btn-success")
             
             # attach move events
             for btn in div_move.element.querySelectorAll("button"):
@@ -174,7 +177,7 @@ class Page(ElementWrapper):
                 else:
                     ul = E('ul')
                     for pr in presets['presets']:
-                        btn = E('button').attr('name','p').attr('value',pr['token']).attr('class','btn btn-primary').inner_html(pr['token'])
+                        btn = E('button').attr('name','p').attr('value',pr['token']).attr('class','btn btn-primary preset_'+pr['token']).inner_html(pr['token'])
                         btn.element.onclick = goto_preset
                         lbl = E('input').attr('type','text').attr('id',pr['token']).attr('value',pr['label']).attr('class','form-control')
                         lbl.element.onchange = setPresetLabel
@@ -182,6 +185,7 @@ class Page(ElementWrapper):
                         ul.append( E('li').append( btn,lbl ) )
 
                     div_presets.append( ul )
+                    await checkActivePreset()
             
                 # load live
                 uri = await utils.post(utils.get_url("camera/getLive"), {'id':self.camid})
@@ -206,6 +210,17 @@ class Page(ElementWrapper):
                         E('p').inner_html(uri['error'])
                     )
 
+        async def checkActivePreset():
+            result = await utils.post(utils.get_url("camera/getActivePreset"), {'id':self.camid})
+
+            for btn in div_presets.element.querySelectorAll("button"):
+                btn.classList.remove("btn-success")
+                btn.classList.add("btn-primary")
+
+            div_presets.element.querySelector("button.preset_"+result).classList.add("btn-success")
+            div_presets.element.querySelector("button.preset_"+result).classList.remove("btn_primary")
+
+            setTimeout(checkActivePreset, 2000)
 
         async def goto_preset(evt):
             preset = int(evt.target.value)
@@ -213,9 +228,11 @@ class Page(ElementWrapper):
             
             if result['success']:
                 for btn in div_presets.element.querySelectorAll("button"):
-                    btn.classList.remove("active")
+                    btn.classList.add("btn-primary")
+                    btn.classList.remove("btn-success")
 
-                evt.target.classList.add("active")                
+                evt.target.classList.remove("btn-primary")
+                evt.target.classList.add("btn-success")
 
         async def setPresetLabel(evt):
             token = int(evt.currentTarget.id)
@@ -225,7 +242,8 @@ class Page(ElementWrapper):
             
         async def moveStart(evt):
             for btn in div_presets.element.querySelectorAll("button"):
-                btn.classList.remove("active")
+                btn.classList.add("btn-primary")
+                btn.classList.remove("btn-success")
                 
             await utils.post(utils.get_url("camera/moveStart"),{"id": self.camid,"direction": evt.currentTarget.id})
 
