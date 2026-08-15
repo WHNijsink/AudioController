@@ -192,7 +192,8 @@ class Page(ElementWrapper):
 
                 if uri['success']:
                     ws = f"ws://{cam.url_extern}:{cam.port_ws}"
-                    video = E('video').attr('id','preview').attr('data-host',ws).attr('data-stream',uri['uri']).attr('autoplay','autoplay').attr('muted','muted').attr('playsinline','playsinline').attr('width','100%')
+                    video = E('video').attr('id','preview').attr('data-host',ws).attr('data-stream',uri['uri']).attr('autoplay','').attr('muted','').attr('playsinline','').attr('width','100%')
+                    video.element.muted = True
                     video.element.addEventListener(
                         "contextmenu",
                         lambda evt: evt.preventDefault()
