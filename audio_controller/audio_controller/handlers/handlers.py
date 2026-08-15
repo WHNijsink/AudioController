@@ -400,6 +400,11 @@ class Camera(BaseHandler):
             self.write(dumps(result))
             return
 
+        elif action == "getActivePreset":
+            args = self.body_to_json()
+            cam = settings.cameras[args['id']]
+            self.write( cam.active )
+
         elif action == "gotoPreset":
             try:
                 args = self.body_to_json()

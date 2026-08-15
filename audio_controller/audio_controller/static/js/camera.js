@@ -125,8 +125,10 @@ $(function() {
 
 				// add preset buttons to dom
 				for(let $item of $response.presets){
-					$('#presets ul').append('<li'+($toggleLabels?'':' class="basic"')+'><button value="'+$item.token+'"'+($cameras[$camid].active == $item.token?' class="active"':'')+'>'+$item.token+'</button><span class="label"> '+$item.label+'</span></li>');
+					$('#presets ul').append('<li'+($toggleLabels?'':' class="basic"')+'><button value="'+$item.token+'" class="preset_'+$item.token+'">'+$item.token+'</button><span class="label"> '+$item.label+'</span></li>');
 				}
+				
+				checkActivePreset();
 
 				// add preset click event
 				$('#presets button').click(function( $e ){
@@ -141,6 +143,24 @@ $(function() {
 
 				// set Instellingen link
 				$('#footer .caminstellingen').attr('href','http://'+$cameras[$camid].url_extern)
+			}
+		});
+	}
+
+	function checkActivePreset(){
+		$.ajax({
+			url: "/camera/getActivePreset",
+			type: "POST",
+			contentType: "application/json",
+			dataType: 'json',
+			data: JSON.stringify({
+				id: parseInt($camid),
+			}),
+			success: function($response){ 
+				$('#presets ul button').removeClass('active');
+				$('#presets ul button.preset_'+$response).addClass('active')
+
+				setTimeout(checkActivePreset, 2000);
 			}
 		});
 	}
