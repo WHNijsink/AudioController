@@ -30,6 +30,7 @@ class Camera:
 
     # Runtime
     presets: list[Preset] = field(default_factory=list)
+    active: int = 0
 
     #
     # ONVIF
@@ -88,7 +89,8 @@ class Camera:
             "config_presets": [
                 asdict(p) if is_dataclass(p) else p
                 for p in self.config_presets
-            ]
+            ],
+            "active": self.active
         }
 
     @classmethod

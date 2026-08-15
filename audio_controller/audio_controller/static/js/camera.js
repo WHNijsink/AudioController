@@ -125,7 +125,7 @@ $(function() {
 
 				// add preset buttons to dom
 				for(let $item of $response.presets){
-					$('#presets ul').append('<li'+($toggleLabels?'':' class="basic"')+'><button value="'+$item.token+'">'+$item.token+'</button><span class="label"> '+$item.label+'</span></li>');
+					$('#presets ul').append('<li'+($toggleLabels?'':' class="basic"')+'><button value="'+$item.token+'"'+($cameras[$camid].active == $item.token?' class="active"':'')+'>'+$item.token+'</button><span class="label"> '+$item.label+'</span></li>');
 				}
 
 				// add preset click event

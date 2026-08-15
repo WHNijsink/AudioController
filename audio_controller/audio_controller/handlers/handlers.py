@@ -404,8 +404,9 @@ class Camera(BaseHandler):
             try:
                 args = self.body_to_json()
                 cam = settings.cameras[args['id']]
-                preset = str(args['preset'])
-                cam.goto_preset(preset)
+                cam.active = str(args['preset'])
+                cam.goto_preset( cam.active )
+                settings.save()
                 result = {
                     "success": True
                 }
