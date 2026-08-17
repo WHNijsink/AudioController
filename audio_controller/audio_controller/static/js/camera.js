@@ -9,6 +9,8 @@ $(function() {
 	* get login
 	*/
 	function getLogin(){
+		$('#login, #cams, #presets, #live, #move, #footer, #user').hide();
+
 		$.ajax({
 			url: "/login/login",
 			type: "POST",
@@ -16,14 +18,13 @@ $(function() {
 			dataType: 'json',
 			success: function($response){
 				if( $response.success ){
-					$('#login').hide();
+					$('#cams, #live, #user').show();
 
 					setUsername( $response.username );
 
 					getCameras();
 				} else {
 					$('#login').show();
-					$('#cams, #presets, #live, #move, #footer, #user').hide();
 
 					$('#login button').click( function(){
 						$.ajax({
@@ -38,7 +39,7 @@ $(function() {
 							success: function($response){
 								if( $response.success ){
 									$('#login').hide();
-									$('#cams, #presets, #live, #move, #footer, #user').show();
+									$('#cams, #user').show();
 									
 									setUsername( $('#login #current-username').val() );
 									
@@ -63,6 +64,8 @@ $(function() {
 	* get cams
 	*/
 	function getCameras(){
+		$('#login, #presets, #live video, #move, #footer').hide();
+
 		$.ajax({
 			url: "/camera/getCameras",
 			type: "POST",
@@ -86,9 +89,7 @@ $(function() {
 
 					// next step: load presets
 					getPresets( $('#cams li:first-child button') );
-					$('#move').show()
 				} else {
-					$('#live video, #move, #presets, #footer').hide();
 					$('#live .alert').text($response.error).show();  // niet ingelogd
 				}
 			}
@@ -99,11 +100,12 @@ $(function() {
 	* handle cams
 	*/
 	function getPresets( $btn ){
+		$('#login, #presets, #live video, #move, #footer').hide();
+
 		$camid = $btn.val();
 		$toggleLabels = $('.toggleLabels').is(':checked');
 
 		$('#cams button').removeClass('active');
-		
 		$btn.addClass('active');
 		
 		// restart wfs
@@ -120,29 +122,34 @@ $(function() {
 				id: parseInt($camid),
 			}),
 			success: function($response){ 
-				// clear preset buttons
-				$('#presets ul').empty();
+				if( $response.err == 'connection' ){
+					$('#live .alert').text("Camera is niet beschikbaar.").show();
+				} else {
+					// clear preset buttons
+					$('#presets ul').empty();
 
-				// add preset buttons to dom
-				for(let $item of $response.presets){
-					$('#presets ul').append('<li'+($toggleLabels?'':' class="basic"')+'><button value="'+$item.token+'" class="preset_'+$item.token+'">'+$item.token+'</button><span class="label"> '+$item.label+'</span></li>');
+					// add preset buttons to dom
+					for(let $item of $response.presets){
+						$('#presets ul').append('<li'+($toggleLabels?'':' class="basic"')+'><button value="'+$item.token+'" class="preset_'+$item.token+'">'+$item.token+'</button><span class="label"> '+$item.label+'</span></li>');
+					}
+					$('#move, #presets, #footer').show();
+					
+					checkActivePreset();
+
+					// add preset click event
+					$('#presets button').click(function( $e ){
+						gotoPreset( $(this) );
+					});
+
+					// load livestream
+					getLive();
+
+					// get streampublish parameter
+					getStreamPublish();
+
+					// set Instellingen link
+					$('#footer .caminstellingen').attr('href','http://'+$cameras[$camid].url_extern)
 				}
-				
-				checkActivePreset();
-
-				// add preset click event
-				$('#presets button').click(function( $e ){
-					gotoPreset( $(this) );
-				});
-
-				// load livestream
-				getLive();
-
-				// get streampublish parameter
-				getStreamPublish();
-
-				// set Instellingen link
-				$('#footer .caminstellingen').attr('href','http://'+$cameras[$camid].url_extern)
 			}
 		});
 	}
@@ -169,6 +176,8 @@ $(function() {
 	 * getLive
 	 */
 	function getLive(){
+		$('#live video').hide();
+
 		$.ajax({
 			url: "/camera/getLive",
 			type: "POST",
@@ -188,16 +197,15 @@ $(function() {
 
 							$wfs.attachMedia( $video, "ws://"+$cameras[$camid].url_extern+":"+$cameras[$camid].port_ws+$response.uri );
 						}
-						$('#live video, #move, #presets, #footer').show();
+						$('#live video').show();
 						$('#live .alert').hide();
 					} else {
-						$('#live video, #move, #presets, #footer').hide();
 						//$('#live .alert').text($response.error).show();
-						$('#live .alert').text("Camera is niet beschikbaar.").show();
+						$('#live .alert').text("Video is niet beschikbaar.").show();
 					}
 				} else {
 					//console.error('getLive fail: '+$response.error);
-					$('#live video, #move, #presets, #footer').hide();
+					$('#live .alert').text("Video is niet beschikbaar.").show();
 				}
 			}
 		});
