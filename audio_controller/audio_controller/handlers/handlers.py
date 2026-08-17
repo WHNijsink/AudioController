@@ -400,12 +400,21 @@ class Camera(BaseHandler):
             self.write(dumps(result))
             return
 
+        elif action == "getActivePreset":
+            try:
+                args = self.body_to_json()
+                cam = settings.cameras[args['id']]
+                self.write( cam.active )
+            except Exception as err:
+                self.write("err")
+
         elif action == "gotoPreset":
             try:
                 args = self.body_to_json()
                 cam = settings.cameras[args['id']]
-                preset = str(args['preset'])
-                cam.goto_preset(preset)
+                cam.active = str(args['preset'])
+                cam.goto_preset( cam.active )
+                settings.save()
                 result = {
                     "success": True
                 }
@@ -534,6 +543,8 @@ class Camera(BaseHandler):
             try:
                 args = self.body_to_json()
                 cam = settings.cameras[args['id']]
+                cam.active = "0"
+                settings.save()
                 cam.reboot()
                 result = {
                     "success": True,

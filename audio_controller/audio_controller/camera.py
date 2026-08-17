@@ -30,6 +30,7 @@ class Camera:
 
     # Runtime
     presets: list[Preset] = field(default_factory=list)
+    active: str = "0"
 
     #
     # ONVIF
@@ -88,7 +89,8 @@ class Camera:
             "config_presets": [
                 asdict(p) if is_dataclass(p) else p
                 for p in self.config_presets
-            ]
+            ],
+            "active": self.active
         }
 
     @classmethod
@@ -197,7 +199,7 @@ class Camera:
 
     def reboot(self):
         """Herstart de camera."""
-
+        
         self._device.SystemReboot()
 
     def is_onvif_available(self, timeout=3) -> bool:

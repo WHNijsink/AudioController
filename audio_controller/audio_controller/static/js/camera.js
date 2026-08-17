@@ -2,6 +2,7 @@ $(function() {
 	var $camid = null;
 	var $cameras = null;
 	var $wfs = new Wfs();
+	var $presetTimeout;
 
 	getLogin();
 
@@ -9,6 +10,8 @@ $(function() {
 	* get login
 	*/
 	function getLogin(){
+		$('#login, #cams, #presets, #live, #move, #footer, #user').hide();
+
 		$.ajax({
 			url: "/login/login",
 			type: "POST",
@@ -16,14 +19,13 @@ $(function() {
 			dataType: 'json',
 			success: function($response){
 				if( $response.success ){
-					$('#login').hide();
+					$('#cams, #live, #user').show();
 
 					setUsername( $response.username );
 
 					getCameras();
 				} else {
 					$('#login').show();
-					$('#cams, #presets, #live, #move, #footer, #user').hide();
 
 					$('#login button').click( function(){
 						$.ajax({
@@ -38,7 +40,7 @@ $(function() {
 							success: function($response){
 								if( $response.success ){
 									$('#login').hide();
-									$('#cams, #presets, #live, #move, #footer, #user').show();
+									$('#cams, #user').show();
 									
 									setUsername( $('#login #current-username').val() );
 									
@@ -63,6 +65,8 @@ $(function() {
 	* get cams
 	*/
 	function getCameras(){
+		$('#login, #presets, #live video, #move, #footer').hide();
+
 		$.ajax({
 			url: "/camera/getCameras",
 			type: "POST",
@@ -86,9 +90,7 @@ $(function() {
 
 					// next step: load presets
 					getPresets( $('#cams li:first-child button') );
-					$('#move').show()
 				} else {
-					$('#live video, #move, #presets, #footer').hide();
 					$('#live .alert').text($response.error).show();  // niet ingelogd
 				}
 			}
@@ -99,11 +101,13 @@ $(function() {
 	* handle cams
 	*/
 	function getPresets( $btn ){
+		$('#login, #presets, #live video, #move, #footer').hide();
+		clearTimeout($presetTimeout);
+
 		$camid = $btn.val();
 		$toggleLabels = $('.toggleLabels').is(':checked');
 
 		$('#cams button').removeClass('active');
-		
 		$btn.addClass('active');
 		
 		// restart wfs
@@ -120,27 +124,52 @@ $(function() {
 				id: parseInt($camid),
 			}),
 			success: function($response){ 
-				// clear preset buttons
-				$('#presets ul').empty();
+				if( $response.err == 'connection' ){
+					$('#live .alert').text("Camera is niet beschikbaar.").show();
+				} else {
+					// clear preset buttons
+					$('#presets ul').empty();
 
-				// add preset buttons to dom
-				for(let $item of $response.presets){
-					$('#presets ul').append('<li'+($toggleLabels?'':' class="basic"')+'><button value="'+$item.token+'">'+$item.token+'</button><span class="label"> '+$item.label+'</span></li>');
+					// add preset buttons to dom
+					for(let $item of $response.presets){
+						$('#presets ul').append('<li'+($toggleLabels?'':' class="basic"')+'><button value="'+$item.token+'" class="preset_'+$item.token+'">'+$item.token+'</button><span class="label"> '+$item.label+'</span></li>');
+					}
+					$('#move, #presets, #footer').show();
+					
+					checkActivePreset();
+
+					// add preset click event
+					$('#presets button').click(function( $e ){
+						gotoPreset( $(this) );
+					});
+
+					// load livestream
+					getLive();
+
+					// get streampublish parameter
+					getStreamPublish();
+
+					// set Instellingen link
+					$('#footer .caminstellingen').attr('href','http://'+$cameras[$camid].url_extern)
 				}
+			}
+		});
+	}
 
-				// add preset click event
-				$('#presets button').click(function( $e ){
-					gotoPreset( $(this) );
-				});
+	function checkActivePreset(){
+		$.ajax({
+			url: "/camera/getActivePreset",
+			type: "POST",
+			contentType: "application/json",
+			dataType: 'json',
+			data: JSON.stringify({
+				id: parseInt($camid),
+			}),
+			success: function($response){ 
+				$('#presets ul button').removeClass('active');
+				$('#presets ul button.preset_'+$response).addClass('active')
 
-				// load livestream
-				getLive();
-
-				// get streampublish parameter
-				getStreamPublish();
-
-				// set Instellingen link
-				$('#footer .caminstellingen').attr('href','http://'+$cameras[$camid].url_extern)
+				$presetTimeout = setTimeout(checkActivePreset, 2000);
 			}
 		});
 	}
@@ -149,6 +178,8 @@ $(function() {
 	 * getLive
 	 */
 	function getLive(){
+		$('#live video').hide();
+
 		$.ajax({
 			url: "/camera/getLive",
 			type: "POST",
@@ -168,16 +199,15 @@ $(function() {
 
 							$wfs.attachMedia( $video, "ws://"+$cameras[$camid].url_extern+":"+$cameras[$camid].port_ws+$response.uri );
 						}
-						$('#live video, #move, #presets, #footer').show();
+						$('#live video').show();
 						$('#live .alert').hide();
 					} else {
-						$('#live video, #move, #presets, #footer').hide();
 						//$('#live .alert').text($response.error).show();
-						$('#live .alert').text("Geen camerabeeld beschikbaar.").show();
+						$('#live .alert').text("Video is niet beschikbaar.").show();
 					}
 				} else {
 					//console.error('getLive fail: '+$response.error);
-					$('#live video, #move, #presets, #footer').hide();
+					$('#live .alert').text("Video is niet beschikbaar.").show();
 				}
 			}
 		});
@@ -193,11 +223,15 @@ $(function() {
 		$cookie[$line[0]] = $line[1];
 	}
 
-	if( 'labels' in $cookie ){
-		if( $cookie.labels == 'true' ){
+	if( 'camera_app_labels' in $cookie ){
+		if( $cookie.camera_app_labels == 'true' ){
 			$('.toggleLabels').attr('checked',true);
 			$('#presets ul li').removeClass('basic');
 		}
+	}
+	if( 'camera_app_audio' in $cookie ){
+		$('.toggleAudio').attr('checked', ($cookie.camera_app_audio == 'true') );
+		toggleAudio();
 	}
 
 	/*
@@ -206,10 +240,10 @@ $(function() {
 	$('.toggleLabels').click(function(){
 		if( $(this).is(':checked') ){
 			$('#presets ul li').removeClass('basic');
-			document.cookie = "labels=true;max-age=2628000"; //max-age = 1 month
+			document.cookie = "camera_app_labels=true;max-age=2628000"; //max-age = 1 month
 		} else {
 			$('#presets ul li').addClass('basic');
-			document.cookie = "labels=false;max-age=2628000"; //max-age = 1 month
+			document.cookie = "camera_app_labels=false;max-age=2628000"; //max-age = 1 month
 		}
 	});
 
@@ -245,6 +279,14 @@ $(function() {
 			}),
 			success: function($response){
 				$('#footer .streampublish input').attr('checked', $response.success)
+				
+				if( $response.success ){
+					$('#live .alert').hide();
+				} else {
+					$("#live .alert").text("Geen live uitzending").show();
+				}
+
+				setTimeout(getStreamPublish, 60000);
 			}
 		});
 	}
@@ -266,28 +308,45 @@ $(function() {
 			data: JSON.stringify({
 				id: parseInt($camid),
 				publish: $val,
-			})
+			}),
+			success: function(){
+				if( $val ){
+					$("#live .alert").hide();
+				} else {
+					$("#live .alert").text("Geen live uitzending").show();
+				}
+			}
 		});
 	});
 
 	/*
-	 * toggle voice
+	 * toggleAudio
 	 */
-	$('.toggleVoice').click(function(){
-		if( $(this).is(':checked') ){
-			$video = document.getElementById("preview");
+	$('.toggleAudio').click(function(){
+		toggleAudio();
+	});
+
+	function toggleAudio(){
+		$video = document.getElementById("preview");
+		if( $('.toggleAudio').is(':checked') ){
 			$video.muted = false;
 			$('#preview').removeAttr("muted");
+			document.cookie = "camera_app_audio=true;max-age=2628000"; //max-age = 1 month
 		} else {
 			$video.muted = true;
+			$('#preview').attr("muted", "");
+			document.cookie = "camera_app_audio=false;max-age=2628000"; //max-age = 1 month
 		}
-	});
+	}
 
 	/*
 	 * reboot
 	 */
 	$('#camreboot').click(function( $e ){
 		if( confirm("Camera herstarten?") ) {
+			clearTimeout($presetTimeout);
+			setTimeout(checkActivePreset, 45000);
+
 			var $btn = $(this);
 			$.ajax({
 				url: "/camera/reboot",
@@ -305,7 +364,6 @@ $(function() {
 	 * move
 	 */
 	$('#move button.ptzmove').on('click touchstart mousedown', function($evt){
-		console.log($evt.type)
 		if( $evt.type == 'click' ){
 			moveClick($evt);
 		} else {
@@ -313,7 +371,6 @@ $(function() {
 		}
 	});
 	$('#move button.ptzstop').on('click touchstart mousedown', function($evt){
-		console.log($evt.type)
 		moveStop();
 	});
 	$('#move button.ptzmove').on('touchend mouseup', function($evt){
