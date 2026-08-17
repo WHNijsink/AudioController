@@ -3,7 +3,6 @@ $(function() {
 	var $cameras = null;
 	var $wfs = new Wfs();
 	var $presetTimeout;
-	var $livestream = null;
 
 	getLogin();
 
@@ -281,10 +280,11 @@ $(function() {
 			success: function($response){
 				$('#footer .streampublish input').attr('checked', $response.success)
 				
-				if( $livestream && !$response.success ){
-					alert("Live uitzending is gestopt.");
+				if( $response.success ){
+					$('#live .alert').hide();
+				} else {
+					$("#live .alert").text("Geen live uitzending").show();
 				}
-				$livestream = $response.success;
 
 				setTimeout(getStreamPublish, 60000);
 			}
@@ -308,7 +308,14 @@ $(function() {
 			data: JSON.stringify({
 				id: parseInt($camid),
 				publish: $val,
-			})
+			}),
+			success: function(){
+				if( $val ){
+					$("#live .alert").hide();
+				} else {
+					$("#live .alert").text("Geen live uitzending").show();
+				}
+			}
 		});
 	});
 
@@ -357,7 +364,6 @@ $(function() {
 	 * move
 	 */
 	$('#move button.ptzmove').on('click touchstart mousedown', function($evt){
-		console.log($evt.type)
 		if( $evt.type == 'click' ){
 			moveClick($evt);
 		} else {
@@ -365,7 +371,6 @@ $(function() {
 		}
 	});
 	$('#move button.ptzstop').on('click touchstart mousedown', function($evt){
-		console.log($evt.type)
 		moveStop();
 	});
 	$('#move button.ptzmove').on('touchend mouseup', function($evt){
