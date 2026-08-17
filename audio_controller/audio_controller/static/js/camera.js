@@ -2,6 +2,7 @@ $(function() {
 	var $camid = null;
 	var $cameras = null;
 	var $wfs = new Wfs();
+	var $presetTimeout;
 
 	getLogin();
 
@@ -101,6 +102,7 @@ $(function() {
 	*/
 	function getPresets( $btn ){
 		$('#login, #presets, #live video, #move, #footer').hide();
+		clearTimeout($presetTimeout);
 
 		$camid = $btn.val();
 		$toggleLabels = $('.toggleLabels').is(':checked');
@@ -167,7 +169,7 @@ $(function() {
 				$('#presets ul button').removeClass('active');
 				$('#presets ul button.preset_'+$response).addClass('active')
 
-				setTimeout(checkActivePreset, 2000);
+				$presetTimeout = setTimeout(checkActivePreset, 2000);
 			}
 		});
 	}
@@ -327,6 +329,9 @@ $(function() {
 	 */
 	$('#camreboot').click(function( $e ){
 		if( confirm("Camera herstarten?") ) {
+			clearTimeout($presetTimeout);
+			setTimeout(checkActivePreset, 45000);
+
 			var $btn = $(this);
 			$.ajax({
 				url: "/camera/reboot",

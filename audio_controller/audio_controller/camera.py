@@ -30,7 +30,7 @@ class Camera:
 
     # Runtime
     presets: list[Preset] = field(default_factory=list)
-    active: int = 0
+    active: str = "0"
 
     #
     # ONVIF
@@ -199,7 +199,6 @@ class Camera:
 
     def reboot(self):
         """Herstart de camera."""
-        self.active = 0
         
         self._device.SystemReboot()
 
