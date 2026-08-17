@@ -1,3 +1,4 @@
+__pragma__('alias', 'S', '$')  # to use jQuery library with 'S' instead of '$'
 import utils
 from elements import Element, element, ElementWrapper, get_Element, get_elements, get_element
 from layout import home, main, set_title
@@ -135,7 +136,6 @@ class Page(ElementWrapper):
             btn_reboot = E('button').attr('id','camreboot').attr('class','btn btn-danger').inner_html('Herstarten')
             btn_reboot.element.onclick = reboot
             inp_publish = E('input').attr('type','checkbox').attr('name','streampublish').attr('value','1').attr('class','form-check-input')
-            inp_publish.element.checked = await getStreamPublish()
             inp_publish.element.onchange = setStreamPublish
             inp_border = E('input').attr('type','checkbox').attr('class','form-check-input')
             inp_border.element.onchange = setBorder
@@ -151,6 +151,7 @@ class Page(ElementWrapper):
                 ) ),
                 E('div').attr('class','reboot').append( btn_reboot )
             )
+            await getStreamPublish()
             
             # set active cam obj
             cam = self.cameras[self.camid]
@@ -263,7 +264,9 @@ class Page(ElementWrapper):
 
         async def getStreamPublish():
             result = await utils.post(utils.get_url("camera/getStreamPublish"),{"id": self.camid})
-            return result["success"]
+            S("#footer .streampublish input").prop("checked", result["success"])
+
+            setTimeout(getStreamPublish, 60000)
 
         async def setStreamPublish(evt):
             publish = evt.currentTarget.checked

@@ -3,6 +3,7 @@ $(function() {
 	var $cameras = null;
 	var $wfs = new Wfs();
 	var $presetTimeout;
+	var $livestream = null;
 
 	getLogin();
 
@@ -279,6 +280,13 @@ $(function() {
 			}),
 			success: function($response){
 				$('#footer .streampublish input').attr('checked', $response.success)
+				
+				if( $livestream && !$response.success ){
+					alert("Live uitzending is gestopt.");
+				}
+				$livestream = $response.success;
+
+				setTimeout(getStreamPublish, 60000);
 			}
 		});
 	}
