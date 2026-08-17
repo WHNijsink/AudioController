@@ -213,13 +213,15 @@ class Page(ElementWrapper):
 
         async def checkActivePreset():
             result = await utils.post(utils.get_url("camera/getActivePreset"), {'id':self.camid})
+            btn_active = div_presets.element.querySelector("button.preset_"+result)
 
             for btn in div_presets.element.querySelectorAll("button"):
                 btn.classList.remove("btn-success")
                 btn.classList.add("btn-primary")
 
-            div_presets.element.querySelector("button.preset_"+result).classList.add("btn-success")
-            div_presets.element.querySelector("button.preset_"+result).classList.remove("btn_primary")
+            if btn_active is not None:
+                btn_active.classList.add("btn-success")
+                btn_active.classList.remove("btn_primary")
 
             setTimeout(checkActivePreset, 2000)
 
