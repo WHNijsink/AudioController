@@ -199,7 +199,8 @@ class Camera:
 
     def reboot(self):
         """Herstart de camera."""
-
+        self.active = 0
+        
         self._device.SystemReboot()
 
     def is_onvif_available(self, timeout=3) -> bool:
