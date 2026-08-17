@@ -193,7 +193,7 @@ $(function() {
 					} else {
 						$('#live video, #move, #presets, #footer').hide();
 						//$('#live .alert').text($response.error).show();
-						$('#live .alert').text("Geen camerabeeld beschikbaar.").show();
+						$('#live .alert').text("Camera is niet beschikbaar.").show();
 					}
 				} else {
 					//console.error('getLive fail: '+$response.error);
