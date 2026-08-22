@@ -267,7 +267,7 @@ class Sources(AccordionItem):
         plist.add_column("name", "Naam").item_to_element(text_element.bind(None, "name"))
         plist.add_column("enabled", "Actief").item_to_element(checkbox_element.bind(None, "enabled"))
         plist.add_column("port_url", "Poort / Url").item_to_element(text_element.bind(None, "port_url"))
-        plist.add_column("scan_prio", "Prio bij automatisch schakelen").item_to_element(text_element.bind(None, "scan_prio"))  # .add_style('width: 100px; max-width:100px;')
+        plist.add_column("scan_prio", "Prio bij 'automatisch bron kiezen'").item_to_element(text_element.bind(None, "scan_prio"))  # .add_style('width: 100px; max-width:100px;')
         plist.add_column("db_level", "dB level threshold").item_to_element(text_element.bind(None, "db_level"))
 
         async def delete_item(item):
