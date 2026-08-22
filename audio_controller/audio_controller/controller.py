@@ -160,7 +160,7 @@ async def scan_ports():
     while True:
         try:
             # look only at enabled sources
-            sources = [s for s in settings.sources if s.enabled]
+            sources = [s for s in settings.sources if s.enabled and s.scan_prio >= 0 ]
 
             # cleanup config, deleting all source-ids which not exist
             source_ids = [s.id for s in sources]
