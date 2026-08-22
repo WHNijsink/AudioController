@@ -60,6 +60,11 @@ class Settings(AccordionItem):
             E("div")
             .attr("class", "form-group row")
             .append(
+                E("label").attr("class", "{} col-form-label".format(width_1)).inner_html("Algemeen").attr('style','font-weight:bold; font-size: initial;'),
+            ),
+            E("div")
+            .attr("class", "form-group row")
+            .append(
                 E("label").attr("class", "{} col-form-label".format(width_1)).inner_html("Titel"),
                 E("div").attr("class", "{}".format(width_2)).append(input_title),
             ),
@@ -101,30 +106,6 @@ class Settings(AccordionItem):
             E("div")
             .attr("class", "form-group row")
             .append(
-                E("label").attr("class", "{} col-form-label".format(width_1)).inner_html("Aantal IN poorten"),
-                E("div").attr("class", "{}".format(width_2)).append(input_nr_in_ports),
-            ),
-            E("div")
-            .attr("class", "form-group row")
-            .append(
-                E("label").attr("class", "{} col-form-label".format(width_1)).inner_html("Aantal OUT poorten"),
-                E("div").attr("class", "{}".format(width_2)).append(input_nr_out_ports),
-            ),
-            E("div")
-            .attr("class", "form-group row")
-            .append(
-                E("label").attr("class", "{} col-form-label".format(width_1)).inner_html("IN poort voor URL streams"),
-                E("div").attr("class", "{}".format(width_2)).append(input_port_in_stream),
-            ),
-            E("div")
-            .attr("class", "form-group row")
-            .append(
-                E("label").attr("class", "{} col-form-label".format(width_1)).inner_html("OUT poort voor URL stream"),
-                E("div").attr("class", "{}".format(width_2)).append(input_port_out_stream),
-            ),
-            E("div")
-            .attr("class", "form-group row")
-            .append(
                 E("label")
                 .attr("class", "{} col-form-label".format(width_1))
                 .inner_html("Toon knop 'Bron en bestemmingen verbinden'"),
@@ -141,7 +122,7 @@ class Settings(AccordionItem):
             .append(
                 E("label")
                 .attr("class", "{} col-form-label".format(width_1))
-                .inner_html("Inschakelen optie 'Automatisch schakelen'"),
+                .inner_html("Toon knop 'Automatisch bron kiezen'"),
                 E("div").attr("class", "{}".format(width_2)).append(input_auto_switch),
             ),
             E("div")
@@ -149,8 +130,37 @@ class Settings(AccordionItem):
             .append(
                 E("label")
                 .attr("class", "{} col-form-label".format(width_1))
-                .inner_html("Wachttijd (minuten) voor 'Automatisch schakelen'"),
+                .inner_html("Wachttijd (minuten) voor 'Automatisch bron kiezen'"),
                 E("div").attr("class", "{}".format(width_2)).append(input_timeout),
+            ),
+            E("div")
+            .attr("class", "form-group row")
+            .append(
+                E("label").attr("class", "{} col-form-label".format(width_1)).inner_html("Geluid: ITEC instellingen").attr('style','font-weight:bold; font-size: initial;'),
+            ),
+            E("div")
+            .attr("class", "form-group row")
+            .append(
+                E("label").attr("class", "{} col-form-label".format(width_1)).inner_html("Aantal IN poorten"),
+                E("div").attr("class", "{}".format(width_2)).append(input_nr_in_ports),
+            ),
+            E("div")
+            .attr("class", "form-group row")
+            .append(
+                E("label").attr("class", "{} col-form-label".format(width_1)).inner_html("Aantal OUT poorten"),
+                E("div").attr("class", "{}".format(width_2)).append(input_nr_out_ports),
+            ),
+            E("div")
+            .attr("class", "form-group row")
+            .append(
+                E("label").attr("class", "{} col-form-label".format(width_1)).inner_html("IN poort externe bronnen"),
+                E("div").attr("class", "{}".format(width_2)).append(input_port_in_stream),
+            ),
+            E("div")
+            .attr("class", "form-group row")
+            .append(
+                E("label").attr("class", "{} col-form-label".format(width_1)).inner_html("OUT poort externe bestemmingen"),
+                E("div").attr("class", "{}".format(width_2)).append(input_port_out_stream),
             ),
         )
 
@@ -257,9 +267,7 @@ class Sources(AccordionItem):
         plist.add_column("name", "Naam").item_to_element(text_element.bind(None, "name"))
         plist.add_column("enabled", "Actief").item_to_element(checkbox_element.bind(None, "enabled"))
         plist.add_column("port_url", "Poort / Url").item_to_element(text_element.bind(None, "port_url"))
-        plist.add_column("scan_prio", "Prio").item_to_element(
-            text_element.bind(None, "scan_prio")
-        )  # .add_style('width: 100px; max-width:100px;')
+        plist.add_column("scan_prio", "Prio").item_to_element(text_element.bind(None, "scan_prio"))  # .add_style('width: 100px; max-width:100px;')
         plist.add_column("db_level", "dB level threshold").item_to_element(text_element.bind(None, "db_level"))
 
         async def delete_item(item):
@@ -465,6 +473,7 @@ class Cameras(AccordionItem):
         def password_element(attr, item):
             r = E("input").attr("type", "password")
             #r.element.value = item[attr]
+            r.element.placeholder = "invullen om te wijzigen"
 
             def onchange(evt):
                 item[attr] = r.element.value
@@ -587,6 +596,7 @@ class Users(AccordionItem):
         def password_element(attr, item):
             r = E("input").attr("type", "password")
             #r.element.value = item[attr]
+            r.element.placeholder = "invullen om te wijzigen"
 
             def onchange(evt):
                 item[attr] = r.element.value
@@ -730,7 +740,6 @@ class TestDebug(AccordionItem):
 class Page(ElementWrapper):
     def __init__(self):
         super().__init__(element("div"))
-        self.attr("style", "max-width: 1000px;")
         self.items = [Settings(), Sources(), Destinations(), Cameras(), Users(), TestDebug()]
         for i in self.items:
             self.append(i)
