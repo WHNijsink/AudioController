@@ -196,7 +196,7 @@ async def auto_switch():
     Continuously check if a switch to another source is needed.
 
     """
-    interval_seconds = 5
+    interval_seconds = settings.settings.timeout_auto_switch * 60
     while True:
         try:
             if settings.settings.enable_option_auto_switch and settings.settings.enable_auto_switch:
