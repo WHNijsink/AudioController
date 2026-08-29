@@ -196,7 +196,7 @@ async def auto_switch():
     Continuously check if a switch to another source is needed.
 
     """
-    interval_seconds = 5
+    interval_seconds = settings.settings.timeout_auto_switch * 60
     while True:
         try:
             if settings.settings.enable_option_auto_switch and settings.settings.enable_auto_switch:
@@ -215,7 +215,7 @@ async def auto_switch():
                 routing_needed = False
                 source: Source = None
                 if source_id is not None:
-                    sources = [s for s in settings.sources if s.enabled]
+                    sources = [s for s in settings.sources if s.enabled and s.scan_prio >= 0]
                     for s in sources:
                         if s.id == source_id and not s.selected:
                             s.selected = True

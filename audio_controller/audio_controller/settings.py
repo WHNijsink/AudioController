@@ -343,7 +343,7 @@ def validate_source_attribute(name: str, value):
             else:
                 return value.strip()
         elif name == 'scan_prio':
-            value = max(0, min(100, value))
+            value = max(-1, min(100, value))
         elif name == 'db_level':
             value = max(-70, min(0, value))
         return value

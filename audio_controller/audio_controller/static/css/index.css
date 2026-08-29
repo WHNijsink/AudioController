@@ -34,7 +34,7 @@ td.pagedListColumnRow {
 }
 
 td.pagedListColumnRow input {
-  width: 120px;
+  width: 100%;
 }
 
 th.pagedListColumnHeader {
@@ -112,6 +112,10 @@ h2 {
   height: 30px;
 }
 
+.accordion_body td input[type='checkbox'] {
+  display: block;
+  margin: auto;
+}
 .accordion_body input[type='checkbox'] {
   width: 18px;
 }
