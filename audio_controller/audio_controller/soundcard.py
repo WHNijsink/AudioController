@@ -1,5 +1,7 @@
 import os
 import functools
+import subprocess
+import getpass
 
 from audio_controller import envvars
 
@@ -84,19 +86,21 @@ def get_example_configuration():
 
 
 def get_soundcard_configuration(cmd):
-    output = os.popen(cmd).read()
+    try:
+        output = subprocess.run(cmd, capture_output=True, text=True).stdout
+    except FileNotFoundError:
+        # aplay/arecord not installed (e.g. non-Pi host): degrade gracefully like os.popen did
+        output = ""
     lines = [line.strip() for line in output.splitlines()]
     return read_configuration(lines)
 
 
 def get_soundcard_configuration_play():
-    cmd = "aplay --list-devices"
-    return get_soundcard_configuration(cmd)
+    return get_soundcard_configuration(["aplay", "--list-devices"])
 
 
 def get_soundcard_configuration_record():
-    cmd = "arecord --list-devices"
-    return get_soundcard_configuration(cmd)
+    return get_soundcard_configuration(["arecord", "--list-devices"])
 
 
 def find_card(config: dict, name: str):
@@ -114,12 +118,11 @@ def ensure_loopback_card():
     config = get_soundcard_configuration_play()
     card_nr, card = get_loopback_card(config)
     if card is None:
-        user = os.popen("whoami").read().strip()
+        user = getpass.getuser()
         if user == "root":
-            # command to create virtual card
-            cmd = "sudo modprobe snd-aloop"
-            print(cmd)
-            os.system(cmd)
+            # command to create virtual card (no shell)
+            print("modprobe snd-aloop")
+            subprocess.run(["sudo", "modprobe", "snd-aloop"])
             config = get_soundcard_configuration_play()
             card_nr, card = get_loopback_card(config)
     return card_nr, card

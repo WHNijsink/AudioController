@@ -25,10 +25,16 @@ _last_time_get_serial = None
 main_logger = logging.getLogger("main")
 
 
+def _filter_usb_ports(names):
+    """Return the ttyUSB* device names from a /dev listing (S6: no shell)."""
+    return sorted(n for n in names if n.startswith("ttyUSB") and n != "ttyUSB")
+
+
 def get_usb_port():
-    ports = os.popen("ls /dev/ | grep ttyUSB").read()
-    ports = ports.strip().split("\n")
-    ports = [p for p in ports if bool(p)]
+    try:
+        ports = _filter_usb_ports(os.listdir("/dev"))
+    except OSError:
+        ports = []
     msg = f"Found {len(ports)} serial usb connections: {ports}"
     print(msg)
     main_logger.info(msg)

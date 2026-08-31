@@ -37,6 +37,7 @@ class Config:
         self.read_from_url = stream.get_url_reader()
         self.sources = None
         self.destinations = None
+        self.url_in = None  # url currently streamed onto the IN port (used by scan_ports); None if none
 
     def route_all_to_null(self):
         """ route all IN ports of itec to null, meaning no sound will go through """
@@ -49,6 +50,7 @@ class Config:
         self.route_all_to_null()
         self.read_from_url.update_url(None)
         self.send_to_urls.update_urls([])
+        self.url_in = None
 
     def get_selected_source(self):
         for source in self.sources:
@@ -112,6 +114,7 @@ class Config:
             return None
 
         port_in, url_in = self.get_input(selected_source)
+        self.url_in = url_in  # remember which url (if any) is on the IN port, for scan_ports (C1)
 
         self.disable_unselected_sources(port_in)
 
@@ -186,8 +189,9 @@ async def scan_ports():
                         level = itec.get_input_level(port)
                         config.current_levels[source.id] = {'level': level, 'threshold': source.db_level, 'prio': source.scan_prio}
 
-        except:
-            pass
+        except Exception as e:
+            # log instead of silently swallowing (C2); keep the loop alive
+            main_logger.warning(f"scan_ports error: {e}")
         await asyncio.sleep(2)
 
 
@@ -232,6 +236,7 @@ async def auto_switch():
                     settings.save()
                     set_routes()
 
-        except:
-            pass
+        except Exception as e:
+            # log instead of silently swallowing (C2); keep the loop alive
+            main_logger.warning(f"auto_switch error: {e}")
         await asyncio.sleep(interval_seconds)

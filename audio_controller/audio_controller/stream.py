@@ -4,14 +4,39 @@ import os
 import time
 from typing import List
 import ctypes
-from subprocess import Popen, PIPE
+from subprocess import Popen, PIPE, TimeoutExpired
 from multiprocessing import Process, Queue
 import logging
+import re
+import shlex
 
 from audio_controller import envvars
 from audio_controller import soundcard
 
 main_logger = logging.getLogger("main")
+
+_BITRATE_RE = re.compile(r"^[0-9]+[KkMm]?$")
+
+
+def sanitize_bitrate(raw: str) -> str:
+    """Return raw if it is a plain ffmpeg bitrate (e.g. '64K'), else the safe default '64K' (S1)."""
+    raw = (raw or "").strip()
+    return raw if _BITRATE_RE.match(raw) else "64K"
+
+
+def ffmpeg_input_for_url(url: str) -> str:
+    """'-i <shell-quoted-url>' — prevents shell injection via the source url (S1)."""
+    return "-i {}".format(shlex.quote(url))
+
+
+def ffmpeg_output_for_url(raw_url: str) -> str:
+    """Parse 'url;bitrate' and return injection-safe ffmpeg output args (S1)."""
+    parts = raw_url.split(";")
+    url = parts[0]
+    bitrate = sanitize_bitrate(parts[1]) if len(parts) > 1 and parts[1] else "64K"
+    content_type = "-content_type audio/mpeg -f mp3"
+    bitrate_ = "-b:a {b} -minrate {b} -maxrate {b} -bufsize {b}".format(b=bitrate)
+    return "{} {} {}".format(content_type, bitrate_, shlex.quote(url))
 
 
 def print_info(msg):
@@ -44,7 +69,11 @@ def execute_ffmpeg(command: str, queue: Queue, testing=False):
     def stop():
         print_info(f"execute_ffmpeg stop: {command}")
         proc.terminate()
-        proc.wait()
+        try:
+            proc.wait(timeout=5)  # C4: don't block forever if ffmpeg ignores SIGTERM
+        except TimeoutExpired:
+            proc.kill()
+            proc.wait()
 
     while True:
         # check if process must stop
@@ -115,7 +144,7 @@ class ReadFromUrl:
         """Create and return process to read audio from url and send to default soundcard"""
         format_ = "-f alsa"
         output = soundcard.get_real_play_device()
-        return FfmpegProcess(f"ffmpeg -i {url} {format_} {output}", testing=False)
+        return FfmpegProcess("ffmpeg {} {} {}".format(ffmpeg_input_for_url(url), format_, output), testing=False)
 
 
 class SendToUrlsSimple:
@@ -141,19 +170,7 @@ class SendToUrlsSimple:
         format_ = "-f alsa"
         input_device = soundcard.get_real_record_device()
         input = f"{format_} -i {input_device}"
-        outputs = []
-        for url in urls:
-            url_splitted = url.split(";")
-            url = url_splitted[0]
-            if len(url_splitted) > 1 and len(url_splitted[1]) > 0:
-                bitrate = url_splitted[1]
-            else:
-                bitrate = "64K"
-            content_type = "-content_type audio/mpeg -f mp3"
-            bitrate_ = f"-b:a {bitrate} -minrate {bitrate} -maxrate {bitrate} -bufsize {bitrate}"
-            output = f'{content_type} {bitrate_} "{url}"'
-            outputs.append(output)
-        outputs = " ".join(outputs)
+        outputs = " ".join(ffmpeg_output_for_url(url) for url in urls)
         cmd = f"ffmpeg {input} {outputs}"
         return FfmpegProcess(cmd)
 
@@ -231,15 +248,7 @@ class SendToUrls:
     def get_send_process(self, input_device, url):
         format_ = "-f alsa"
         input = f"{format_} -i {input_device}"
-        url_splitted = url.split(";")
-        url = url_splitted[0]
-        if len(url_splitted) > 1 and len(url_splitted[1]) > 0:
-            bitrate = url_splitted[1]
-        else:
-            bitrate = "64K"
-        content_type = "-content_type audio/mpeg -f mp3"
-        bitrate_ = f"-b:a {bitrate} -minrate {bitrate} -maxrate {bitrate} -bufsize {bitrate}"
-        output = f'{content_type} {bitrate_} "{url}"'
+        output = ffmpeg_output_for_url(url)
         cmd = f"ffmpeg {input} {output}"
         return FfmpegProcess(cmd)
 
