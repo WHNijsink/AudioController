@@ -1,5 +1,8 @@
 """ Module which handles settings, which are configurable and thus persistent """
 import sys, traceback
+import os
+import json
+import threading
 from typing import List
 from pathlib import Path
 import pickle
@@ -92,7 +95,10 @@ def default_destinations():
 #
 
 # file to save settings (including sources and destinations)
-file = Path.home() / ".audio_controller_settings.pickle"
+file = Path.home() / ".audio_controller_settings.json"
+# legacy pickle file, only read once for a one-time migration to json (S2)
+_legacy_pickle_file = Path.home() / ".audio_controller_settings.pickle"
+_save_lock = threading.Lock()
 
 settings = Settings()
 sources: List[Source] = []
@@ -106,10 +112,31 @@ users: List[user.User] = []
 #
 
 
+def _store_dict() -> dict:
+    """Serializable snapshot of all persistent settings (json-safe)."""
+    return {
+        'settings': asdict(settings),
+        'sources': [asdict(obj) for obj in sources],
+        'destinations': [asdict(obj) for obj in destinations],
+        'psalmbord': asdict(pb),
+        'cameras': [obj.to_dict() for obj in cameras],
+        'users': [asdict(obj) for obj in users],
+    }
+
+
 def upgrade(store: dict):
     """ upgrade store, for example after software is updated on a running application/device """
     if not 'version' in store['settings']:
         store['settings']['version'] = 1
+
+    # Backfill keys that were introduced in this release without their own
+    # upgrade step. Without this, upgrading a pre-camera/pre-user settings store
+    # raises KeyError in use_from_store and silently loses all settings (falls
+    # back to defaults). Seeding defaults here preserves the migration.
+    if 'users' not in store:
+        store['users'] = [asdict(u) for u in user.default_users()]
+    if 'cameras' not in store:
+        store['cameras'] = [c.to_dict() for c in camera.default_cameras()]
 
     if store['settings']['version'] == 1:
         store['settings']['version'] = 2
@@ -189,28 +216,37 @@ def load():
     """ Load settings from file, if available. Return True on success, False otherwise. """
     if file.exists():
         try:
-            with open(file, 'rb') as f:
-                store: dict = pickle.loads(f.read())
-                use_from_store(store)
-                save()  # save possible upgrades immediately
-                return True
-        except:
+            with open(file, 'r', encoding='utf-8') as f:
+                store: dict = json.loads(f.read())
+            use_from_store(store)
+            save()  # save possible upgrades immediately
+            return True
+        except Exception:
+            return False
+    # one-time migration: older versions stored settings as a local pickle file (S2).
+    # This reads the trusted on-disk file once, then persists as json going forward.
+    if _legacy_pickle_file.exists():
+        try:
+            with open(_legacy_pickle_file, 'rb') as f:
+                store = pickle.loads(f.read())
+            use_from_store(store)
+            save()  # now persisted as json
+            return True
+        except Exception:
             return False
     return False
 
 
 def save():
-    """ Save all settings to file """
-    with open(file, 'wb') as f:
-        store = {
-            'settings': asdict(settings),
-            'sources': [asdict(obj) for obj in sources],
-            'destinations': [asdict(obj) for obj in destinations],
-            'psalmbord': asdict(pb),
-            'cameras': [obj.to_dict() for obj in cameras],
-            'users': [asdict(obj) for obj in users],
-        }
-        f.write(pickle.dumps(store))
+    """ Save all settings to file, atomically (temp file + os.replace), as json (C3). """
+    with _save_lock:
+        data = json.dumps(_store_dict())
+        tmp = file.with_suffix(file.suffix + '.tmp')
+        with open(tmp, 'w', encoding='utf-8') as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, file)
 
 
 def restore():
@@ -237,22 +273,25 @@ init_settings()
 
 
 def get_binary():
-    """ Get content of settings file as binary object """
+    """ Get content of settings file as binary object (json bytes) """
     with open(file, 'rb') as f:
         return f.read()
 
 
 def set_binary(obj):
-    """ Set content of settings file from binary object """
-    store = pickle.loads(obj)
+    """ Replace settings from an uploaded settings file (json bytes) (S2).
+    Silently ignores anything that is not a valid settings json object. """
+    try:
+        store = json.loads(obj)
+    except (ValueError, TypeError):
+        return
     if not isinstance(store, dict):
         return
     # check some required attributes (not all, because some appeared after upgrades)
-    if not all([field in store for field in 'settings sources destinations'.split()]):
+    if not all(field in store for field in 'settings sources destinations'.split()):
         return
     use_from_store(store)
-    with open(file, 'wb') as f:
-        f.write(obj)
+    save()
 
 
 #
@@ -510,8 +549,15 @@ def update_users(new_users: List[dict]):
 
             if setPassword:
                 usr.password = validate_user_attribute("password", usr.password)
-                usr.password = user.encryptPassword(usr.password)
-            
+                usr.password = user.hash_password(usr.password)  # salted (was unsalted blake2b)
+                usr.must_change_password = False  # a real password was just set
+            else:
+                # keep the server-side forced-change flag when the password is unchanged
+                try:
+                    usr.must_change_password = users[i].must_change_password
+                except IndexError:
+                    pass
+
             usr.username = validate_user_attribute("username", usr.username)
             usr.admin = usr.admin or usr.admin == "True"
             usr.camera = usr.camera or usr.camera == "True"
