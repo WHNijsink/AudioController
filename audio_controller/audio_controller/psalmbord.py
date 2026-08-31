@@ -11,6 +11,7 @@ from . import fonts, settings
 
 # external libs
 import tornado.web
+from tornado.escape import xhtml_escape
 
 
 #
@@ -47,6 +48,9 @@ class Psalmbord:
     def psalmbord_as_html(self) -> str:
         """ Create a html string to display the psalmbord in the browser """
 
+        # guard against an empty screen list or an out-of-range active index
+        if not self.screens or not (0 <= self.active < len(self.screens)):
+            return ""
         regels = self.screens[self.active]["text"].splitlines()
 
         content = ""
@@ -65,7 +69,7 @@ class Psalmbord:
                 content += "<span class='col1'>"
                 for col1 in col[0].split(" "):
                     if col1.strip() != "":
-                        content += f"<span>{col1}</span>"
+                        content += f"<span>{xhtml_escape(col1)}</span>"
                 content += "</span>"
 
                 content += "<span class='col2'>:</span>"
@@ -73,13 +77,13 @@ class Psalmbord:
                 content += "<span class='col3'>"
                 for col3 in col[1].split(" "):
                     if col3.strip() != "":
-                        content += f"<span>{col3}</span>"
+                        content += f"<span>{xhtml_escape(col3)}</span>"
                 content += "</span>"
             else:
                 # regel without columns
                 """ replace optional ";" with ":" to prevent splitting and alignment """
                 regel_text = r.replace(";",":")
-                content += f"<span class='no-col'>{regel_text}</span>"
+                content += f"<span class='no-col'>{xhtml_escape(regel_text)}</span>"
             
             content += "</div>\n"
 
