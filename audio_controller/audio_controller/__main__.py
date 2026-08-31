@@ -7,6 +7,8 @@ import traceback
 import argparse
 import asyncio
 import logging
+import subprocess
+import re
 
 # externals
 import tornado.ioloop
@@ -27,8 +29,20 @@ from . import psalmbord
 here = Path(os.path.dirname(__file__)).resolve()
 main_logger = logging.getLogger("main")
 
+_VOLUME_RE = re.compile(r"^\d+%?$")
 
-def make_app():
+
+def valid_volume(raw) -> str:
+    """Return a validated ALSA volume like '80%'. Defaults to '100%' for anything unsafe (S6)."""
+    if not isinstance(raw, str):
+        return "100%"
+    raw = raw.strip()
+    if not _VOLUME_RE.match(raw):
+        return "100%"
+    return raw if raw.endswith("%") else raw + "%"
+
+
+def make_app(local_no_login: bool = False):
     template_dir = here / "views"
     static_dir = here / "static"
     settings = dict(
@@ -36,10 +50,22 @@ def make_app():
         autoreload=False,
         cookie_secret=user.get_cookie_secret(),
         template_path=str(template_dir),
+        local_no_login=local_no_login,
+        xsrf_cookies=True,
     )
 
     sio = socketio.AsyncServer(async_mode="tornado")
     handlers.websocket_handlers(sio)
+
+    _SioHandler = socketio.get_tornado_handler(sio)
+
+    class WebSocketHandler(_SioHandler):
+        def check_xsrf_cookie(self):
+            # Socket.IO's long-polling transport POSTs carry no _xsrf token.
+            # Exempt them: the handshake is a GET, engine.io already enforces a
+            # same-origin check_origin, and the `connect` event runs the
+            # login_required() gate. (S5)
+            pass
 
     _handlers = [
         ("/", handlers.Main),
@@ -51,7 +77,7 @@ def make_app():
         ("/camera/.*", handlers.Camera),
         ("/(favicon.ico)", handlers.StaticFileHandler, {"path": str(static_dir)}),
         ("/static/(.*)", handlers.StaticFileHandler, {"path": str(static_dir)}),
-        ("/websocket/", socketio.get_tornado_handler(sio)),
+        ("/websocket/", WebSocketHandler),
     ]
 
     return tornado.web.Application(handlers=_handlers, **settings)
@@ -72,17 +98,16 @@ def init_system(args):
     volume = "100%"
     try:
         if "--volume" in args:
-            v = args[args.index("--volume") + 1]
-            if "%" in v:
-                volume = v
-    except:
+            volume = valid_volume(args[args.index("--volume") + 1])
+    except (ValueError, IndexError):
         pass
-    # set the output volume level to a fixed percentage
-    # TODO use module soundcard here, to identify the device
-    # cmd = f"amixer -M sset 'Master' {volume}" # without external sound card
-    cmd = f"amixer -M sset 'PCM' {volume}"  # with external sound card
-    print(cmd)
-    msg = os.popen(cmd).read()
+    # set the output volume to a fixed percentage (no shell; args are a list -> no injection) (S6)
+    try:
+        result = subprocess.run(["amixer", "-M", "sset", "PCM", volume],
+                                capture_output=True, text=True)
+        msg = result.stdout
+    except FileNotFoundError:
+        msg = "amixer not available"
     print(msg)
     main_logger.info(msg)
 
@@ -95,7 +120,7 @@ def init_system(args):
 async def set_gpio():
     # activate leds on warnings / errors
     if gpio.is_enabled:
-        gpio.power_button.handle_reboot = lambda: os.system("shutdown -r now")
+        gpio.power_button.handle_reboot = lambda: subprocess.run(["shutdown", "-r", "now"])
         interval_seconds = 4
         while True:
             try:
@@ -107,8 +132,8 @@ async def set_gpio():
                             connected = True
                             break
                 gpio.source_and_destination_connected(connected)
-            except:
-                pass
+            except Exception as e:
+                main_logger.warning(f"set_gpio error: {e}")
             await asyncio.sleep(interval_seconds)
 
 
@@ -116,10 +141,11 @@ def main():
     args = sys.argv[1:]
     try:
         init_system(args)
-        # listen on 2 ports, 5000 for localhost and 8080 for external usage (external usage requires login)
-        port_address = [(5000, "127.0.0.1"), (8080, "0.0.0.0")]
-        for port, address in port_address:
-            app = make_app()
+        # listen on 2 ports: 5000 loopback-only (trusted, no login) and
+        # 8080 external (login required). Trust follows the port, not the Host header (S4).
+        port_address = [(5000, "127.0.0.1", True), (8080, "0.0.0.0", False)]
+        for port, address, local_no_login in port_address:
+            app = make_app(local_no_login)
             app.listen(port=port, address=address)
             msg = f"Listening on {address}:{port}"
             print(msg)

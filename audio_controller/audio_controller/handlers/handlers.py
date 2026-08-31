@@ -2,6 +2,7 @@
 import os
 import sys
 import signal
+import subprocess
 import logging
 import math
 import datetime as dt
@@ -22,7 +23,7 @@ import tornado.web
 # import tornado.websocket
 
 # internals
-from audio_controller import settings, controller, user, loggers, gpio, __version__
+from audio_controller import settings, controller, user, loggers, gpio, psalmbord, __version__
 
 here = Path(os.path.dirname(__file__)).resolve()
 main_logger = logging.getLogger("main")
@@ -32,18 +33,28 @@ class BaseHandler(tornado.web.RequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
+    def prepare(self):
+        # Ensure the _xsrf cookie is issued to the client. Tornado only sets it
+        # when xsrf_token is accessed; without this the SPA/mobile app has no
+        # token to send and every state-changing POST would 403 (S5).
+        self.xsrf_token
+
     def body_to_json(self):
         body = self.request.body
         if not body:
             body = b"{}"
-        return json.loads(body)
+        try:
+            return json.loads(body)
+        except (json.JSONDecodeError, ValueError):
+            # malformed request body -> treat as empty instead of crashing 500 (C5)
+            return {}
 
     def set_default_headers(self):
-        self.set_header("Access-Control-Allow-Origin", "*")
+        # App is served same-origin; do not advertise a wildcard CORS policy (S5).
         self.set_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS, HEAD, PUT")
         self.set_header(
             "Access-Control-Allow-Headers",
-            "Origin, X-Requested-With, Content-Type: application/json, Accept, Authorization",
+            "Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Xsrftoken",
         )
 
     def get_current_user(self):
@@ -65,11 +76,23 @@ class BaseHandler(tornado.web.RequestHandler):
         return not self.is_localhost()
 
     def is_localhost(self):
-        """Return True if request comes from localhost (when port is 5000 this is True). False otherwise"""
-        return self.request.host.endswith(":5000")
+        """Return True only for the trusted, loopback-only listener.
+        Trust is decided by the app this handler runs in (set per listening
+        port in make_app), NOT by the client-controlled Host header (S4)."""
+        return bool(self.application.settings.get("local_no_login", False))
 
     def write_login_exception(self):
         self.write(dumps({"LoginException": "Please login first"}))
+
+    def must_change_password(self):
+        """True if the logged-in user still has to set a new password before doing
+        anything else (forced password change on first login)."""
+        if not self.current_user:
+            return False
+        for usr in settings.users:
+            if usr.username == self.current_user:
+                return bool(usr.must_change_password)
+        return False
 
 
 def get_action(path: str):
@@ -122,13 +145,20 @@ class Login(BaseHandler):
         return False
     
     def check_app(self, usr):
-        referer = self.request.headers.get('Referer').rsplit("/", 1)[-1]
+        referer = (self.request.headers.get('Referer') or '').rsplit("/", 1)[-1]  # guard missing Referer (avoid 500)
 
         return (usr.admin or (usr.camera and referer == "camera"))
     
     def get_user(self, username, password = None):
         for usr in settings.users:
-            if username == usr.username and (password is None or user.encryptPassword(password) == usr.password):
+            if username != usr.username:
+                continue
+            if password is None or user.verify_password(password, usr.password):
+                # transparently upgrade a legacy unsalted hash to a salted one on
+                # a successful password login (one-time, per user).
+                if password is not None and user.is_legacy_hash(usr.password):
+                    usr.password = user.hash_password(password)
+                    settings.save()
                 return usr
         return False
 
@@ -147,7 +177,8 @@ class Login(BaseHandler):
             if self.current_user:  # not None and not empty string
                 usr = self.get_user(self.current_user)
                 if usr is not False and self.check_app(usr):
-                    return self.write(dumps({"success": True,"username":self.current_user}))
+                    return self.write(dumps({"success": True, "username": self.current_user,
+                                             "must_change_password": bool(usr.must_change_password)}))
 
             # else: try login if arguments are provided
             args = self.body_to_json()
@@ -159,7 +190,9 @@ class Login(BaseHandler):
                 print(msg)
                 main_logger.info(msg)
                 self.set_cookie_username(username)  # assumes unique usernames
-                self.write(dumps({"success": True}))
+                usr = self.get_user(username)
+                self.write(dumps({"success": True,
+                                  "must_change_password": bool(usr and usr.must_change_password)}))
             else:
                 msg = f"Login failed for user {username}"
                 print(msg)
@@ -177,7 +210,7 @@ class Login(BaseHandler):
 
         elif action == 'setUsers':
             args = self.body_to_json()
-            users = args["users"]
+            users = args.get("users", [])
             settings.update_users(users)
             write_users()
             await notify_change()
@@ -217,6 +250,10 @@ class General(BaseHandler):
             self.write(dumps({"success": False}))
             return
 
+        if self.login_required() and self.must_change_password():
+            self.write(dumps({"success": False, "must_change_password": True}))
+            return
+
         def write_settings():
             self.write(dumps(asdict(settings.settings)))
 
@@ -243,15 +280,15 @@ class General(BaseHandler):
             return
 
         elif action == "ifconfig":
-            self.write(os.popen("ifconfig").read())
+            self.write(subprocess.run(["ifconfig"], capture_output=True, text=True).stdout)
             return
 
         elif action == "reboot":
-            os.system("shutdown -r now")
+            subprocess.run(["shutdown", "-r", "now"])
             return
 
         elif action == "shutdown":
-            os.system("shutdown now")
+            subprocess.run(["shutdown", "now"])
             return
 
         elif action == "downloadSettings":
@@ -287,6 +324,16 @@ class Audio(BaseHandler):
     async def post(self):
         action = get_action(self.request.path)
 
+        # Audio routing endpoints (setSources/setDestinations) are state-changing;
+        # require login on the external port, same as General (S7 - was unguarded).
+        if self.login_required() and not self.logged_in():
+            self.write(dumps({"success": False}))
+            return
+
+        if self.login_required() and self.must_change_password():
+            self.write(dumps({"success": False, "must_change_password": True}))
+            return
+
         def write_sources():
             self.write(dumps([asdict(obj) for obj in settings.sources]))
 
@@ -305,7 +352,7 @@ class Audio(BaseHandler):
 
         elif action == "setSources":
             args = self.body_to_json()
-            sources = args["sources"]
+            sources = args.get("sources", [])
             settings.update_sources(sources)
             controller.set_routes()
             write_sources()
@@ -318,7 +365,7 @@ class Audio(BaseHandler):
 
         elif action == "setDestinations":
             args = self.body_to_json()
-            destinations = args["destinations"]
+            destinations = args.get("destinations", [])
             settings.update_destinations(destinations)
             controller.set_routes()
             write_destinations()
@@ -331,8 +378,8 @@ class Audio(BaseHandler):
             return
 
         elif action == "soundcards":
-            aplay = os.popen("aplay -l").read()
-            arecord = os.popen("arecord -l").read()
+            aplay = subprocess.run(["aplay", "-l"], capture_output=True, text=True).stdout
+            arecord = subprocess.run(["arecord", "-l"], capture_output=True, text=True).stdout
             self.write(f"{aplay}\n{arecord}")
             return
 
@@ -342,6 +389,10 @@ class Audio(BaseHandler):
 
 
 class CameraApp(tornado.web.RequestHandler):
+    def prepare(self):
+        # issue the _xsrf cookie so camera.js can send it on its POSTs (S5)
+        self.xsrf_token
+
     def get(self):
         if settings.settings.enable_psalmbord:
             font = settings.pb.fontfamily
@@ -363,6 +414,11 @@ class Camera(BaseHandler):
                 "success": False,
                 "error": "Niet ingelogd"
             }))
+            return
+
+        if self.login_required() and self.must_change_password():
+            self.write(dumps({"success": False, "must_change_password": True,
+                              "error": "Wachtwoord wijzigen vereist"}))
             return
 
         def write_cameras(setCameras = False):
@@ -558,11 +614,24 @@ class Camera(BaseHandler):
             return
 
 class Psalmbord(tornado.web.RequestHandler):
+    def prepare(self):
+        # issue the _xsrf cookie when the board page is loaded
+        self.xsrf_token
+
+    def check_xsrf_cookie(self):
+        # The /psalmbord POST is read-only (returns board html/state only), so it
+        # is exempt from XSRF. This lets the kiosk board keep polling without a
+        # token (S5). State-changing endpoints (General/Login/Camera) stay protected.
+        pass
+
     def body_to_json(self):
         body = self.request.body
         if not body:
             body = b"{}"
-        return json.loads(body)
+        try:
+            return json.loads(body)
+        except (json.JSONDecodeError, ValueError):
+            return {}
     
     def get_css(self):
         fs = settings.pb.fontsize
