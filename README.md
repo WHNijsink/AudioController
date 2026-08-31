@@ -249,3 +249,60 @@ To read or write audio from/to an url, install ffmpeg.
 
 
 
+
+## Development / build setup (B3)
+
+Some runtime assets are **not** in git (see `.gitignore`) and must be produced/placed
+locally, otherwise the web UI loads blank or unstyled:
+
+- `audio_controller/audio_controller/static/js/main*.js` — the compiled Transcrypt output.
+- `.../static/js/bootstrap-4.1.3-dist/` and `.../static/js/fontawesome-free-5.13.1-web/` —
+  vendored CSS/JS bundles.
+
+Steps:
+
+1. **Create the virtualenv** (installs tornado, transcrypt, pytest, …):
+   ```
+   bash create_venv.sh
+   ```
+2. **Compile the frontend** (Python in `transcrypt/python` → `main.js`). This watches for
+   changes and recompiles on save:
+   ```
+   source pyenv/bin/activate
+   python -m manage_env compile_on_save
+   ```
+   The generated `main.js` is copied into `audio_controller/audio_controller/static/js/`.
+   (`manage_env` also installs the webpack toolchain via npm on first run.)
+3. **Vendor assets**: place the `bootstrap-4.1.3-dist` and `fontawesome-free-5.13.1-web`
+   directories under `audio_controller/audio_controller/static/js/` (download from the
+   respective projects; they are intentionally git-ignored).
+4. **Run the tests**:
+   ```
+   source pyenv/bin/activate
+   cd audio_controller
+   python -m pytest -q
+   ```
+5. **Run the app**:
+   ```
+   bash run_audio_controller.sh
+   ```
+
+
+
+
+## Security hardening (v1.5.0)
+
+This release hardens the application (see the PR description for details):
+
+- Settings are stored as **JSON** with an atomic write; uploaded settings are parsed
+  as JSON, never unpickled (no more arbitrary-code-execution on upload).
+- All shell-outs use `subprocess` with argument lists (no `shell=True`); the ffmpeg
+  stream commands shell-quote URLs and validate the bitrate.
+- Trust for the no-login local port follows the **listening port**, not the
+  client-controlled `Host` header.
+- **XSRF** protection is enabled on state-changing POSTs; the read-only board endpoint
+  and the socket.io transport are exempt. Wildcard CORS is removed.
+- The board HTML escapes all user text (no stored XSS).
+- Passwords are stored with **salted PBKDF2**; legacy unsalted hashes still verify and
+  are upgraded on next login. The default admin must set a new password on first login.
+- The audio-routing endpoints now require login on the external port.
