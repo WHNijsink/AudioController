@@ -94,6 +94,17 @@ class BaseHandler(tornado.web.RequestHandler):
                 return bool(usr.must_change_password)
         return False
 
+    def current_user_is_admin(self):
+        """True if the logged-in user has the admin role (used to gate system/config
+        actions). On the trusted local port there is no user; callers guard with
+        login_required() so that path stays open."""
+        if not self.current_user:
+            return False
+        for usr in settings.users:
+            if usr.username == self.current_user:
+                return bool(usr.admin)
+        return False
+
 
 def get_action(path: str):
     """get action from path, where path is assumed to be '/{controller}/{action}.*'"""
@@ -164,6 +175,22 @@ class Login(BaseHandler):
 
     async def post(self):
         action = get_action(self.request.path)
+
+        # User administration must not be reachable without authentication (S8).
+        # login / logout / login_required stay open; the rest needs login, and
+        # listing or modifying users needs admin.
+        if action in ("setUsers", "getUsers", "setUser"):
+            if self.login_required() and not self.logged_in():
+                self.write(dumps({"success": False, "LoginException": "Please login first"}))
+                return
+            if action in ("setUsers", "getUsers"):
+                me = self.get_user(self.current_user) if self.current_user else False
+                if self.login_required() and (me is False or not me.admin):
+                    self.write(dumps({"success": False, "error": "Geen rechten"}))
+                    return
+                if self.login_required() and self.must_change_password():
+                    self.write(dumps({"success": False, "must_change_password": True}))
+                    return
 
         if action == "login_required":
             self.write(dumps({"login_required": self.login_required()}))
@@ -250,6 +277,12 @@ class General(BaseHandler):
             self.write(dumps({"success": False}))
             return
 
+        # system/config actions are admin-only; a camera-only session must not
+        # reboot, change routing or upload settings (privilege escalation) (S9)
+        if self.login_required() and not self.current_user_is_admin():
+            self.write(dumps({"success": False, "error": "Geen rechten"}))
+            return
+
         if self.login_required() and self.must_change_password():
             self.write(dumps({"success": False, "must_change_password": True}))
             return
@@ -328,6 +361,11 @@ class Audio(BaseHandler):
         # require login on the external port, same as General (S7 - was unguarded).
         if self.login_required() and not self.logged_in():
             self.write(dumps({"success": False}))
+            return
+
+        # routing configuration is admin-only (S9)
+        if self.login_required() and not self.current_user_is_admin():
+            self.write(dumps({"success": False, "error": "Geen rechten"}))
             return
 
         if self.login_required() and self.must_change_password():
@@ -421,14 +459,28 @@ class Camera(BaseHandler):
                               "error": "Wachtwoord wijzigen vereist"}))
             return
 
+        def cam_dict(obj):
+            d = obj.to_dict()
+            # ONVIF credentials are only for admins (the settings grid); a
+            # camera-only session lists/controls cameras but must not read the
+            # stored passwords (S9)
+            if self.login_required() and not self.current_user_is_admin():
+                d.pop("password", None)
+            return d
+
         def write_cameras(setCameras = False):
             if setCameras:
-                self.write(dumps([obj.to_dict() for obj in settings.cameras]))
+                self.write(dumps([cam_dict(obj) for obj in settings.cameras]))
             else:
                 self.write(dumps({
                     "success": True,
-                    "cameras": [obj.to_dict() for obj in settings.cameras]
+                    "cameras": [cam_dict(obj) for obj in settings.cameras]
                 }))
+
+        if action == "setCameras":
+            if self.login_required() and not self.current_user_is_admin():
+                self.write(dumps({"success": False, "error": "Geen rechten"}))
+                return
 
         if action == "getCameras":
             write_cameras()
