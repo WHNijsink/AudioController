@@ -1,3 +1,12 @@
+// Send Tornado's XSRF token on every ajax POST (double-submit cookie) (S5).
+$.ajaxSetup({
+	beforeSend: function(xhr) {
+		var m = document.cookie.match(/(?:^|;\s*)_xsrf=([^;]+)/);
+		if (m) { xhr.setRequestHeader("X-Xsrftoken", decodeURIComponent(m[1])); }
+	}
+});
+
+
 $(function() {
 	var $camid = null;
 	var $cameras = null;

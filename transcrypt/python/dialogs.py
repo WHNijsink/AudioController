@@ -156,6 +156,63 @@ class DialogLogin(Dialog):
 dialog_login = DialogLogin()
 
 
+class DialogChangePassword(Dialog):
+    """ Force the user to set a new password (forced change on first login). """
+
+    def __init__(self):
+        super().__init__("Nieuw wachtwoord instellen")
+        self.modal_dialog.element.style.maxWidth = "500px"
+        # force: static backdrop and no dismiss, so it cannot be skipped
+        self.attr('data-backdrop', 'static').attr('data-keyboard', 'false')
+        E = Element
+        self.deferred = None
+        button_save = self.add_button('btn btn-primary', 'Opslaan')
+        button_save.element.onclick = lambda evt: self.on_save()
+
+        container = E('div').attr('class', 'container')
+        self.body.append(container)
+
+        self.input_new = E('input').attr('type', 'password')
+        self.input_confirm = E('input').attr('type', 'password')
+        self.alert = E('div').attr('class', 'alert alert-danger').attr('style', 'display:none')
+
+        container.append(
+            self.alert,
+            E('div').attr('class', 'form-group row').append(
+                E('label').inner_html("Nieuw wachtwoord").attr('class', 'col-sm-4'),
+                self.input_new.attr('class', 'form-control col-sm-7'),
+            ),
+            E('div').attr('class', 'form-group row').append(
+                E('label').inner_html("Bevestig").attr('class', 'col-sm-4'),
+                self.input_confirm.attr('class', 'form-control col-sm-7'),
+            ),
+        )
+
+    def on_save(self):
+        pw = self.input_new.element.value
+        confirm = self.input_confirm.element.value
+        if pw == "":
+            self.alert.inner_html("Wachtwoord mag niet leeg zijn").attr('style', 'display:block')
+            return
+        if pw != confirm:
+            self.alert.inner_html("Wachtwoorden komen niet overeen").attr('style', 'display:block')
+            return
+        if self.deferred is not None:
+            self.deferred.resolve(pw)
+            self.deferred = None
+
+    def get_new_password(self):
+        self.input_new.element.value = ""
+        self.input_confirm.element.value = ""
+        self.alert.attr('style', 'display:none')
+        self.deferred = S.Deferred()
+        self.show()
+        return self.deferred.promise()
+
+
+dialog_change_password = DialogChangePassword()
+
+
 class DialogListSelect(Dialog):
     """ Dialog to select something from a list """
 
