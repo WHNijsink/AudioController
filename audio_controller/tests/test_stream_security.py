@@ -1,4 +1,3 @@
-import shlex
 from audio_controller import stream
 
 
@@ -15,20 +14,25 @@ def test_sanitize_bitrate_rejects_injection():
     assert stream.sanitize_bitrate("$(reboot)") == "64K"
 
 
-def test_ffmpeg_input_quotes_url():
+def test_ffmpeg_input_is_argv_with_url_single_token():
+    # no shell is used; the url is one argv element and cannot be split/injected
     raw = "http://host/live; rm -rf ~"
     out = stream.ffmpeg_input_for_url(raw)
-    assert shlex.quote(raw) in out          # dangerous chars are inside a shell-quoted token
-    assert out.startswith("-i ")
+    assert out == ["-i", raw]
+    assert isinstance(out, list)
 
 
-def test_ffmpeg_output_neutralizes_injection():
-    out = stream.ffmpeg_output_for_url("icecast://h/m`reboot`")
-    assert shlex.quote("icecast://h/m`reboot`") in out
-    assert "-b:a 64K" in out
+def test_ffmpeg_output_is_argv_with_url_single_token():
+    raw = "icecast://h/m`reboot`"
+    out = stream.ffmpeg_output_for_url(raw)
+    assert isinstance(out, list)
+    assert out[-1] == raw                       # url is a single trailing argv token
+    i = out.index("-b:a")
+    assert out[i + 1] == "64K"                  # default bitrate as its own token
 
 
 def test_ffmpeg_output_bitrate_after_semicolon():
     out = stream.ffmpeg_output_for_url("icecast://h/mount;128K")
-    assert "-b:a 128K" in out
-    assert shlex.quote("icecast://h/mount") in out
+    assert out[-1] == "icecast://h/mount"
+    i = out.index("-b:a")
+    assert out[i + 1] == "128K"

@@ -4,11 +4,10 @@ import os
 import time
 from typing import List
 import ctypes
-from subprocess import Popen, PIPE, TimeoutExpired
+from subprocess import Popen, PIPE, TimeoutExpired, DEVNULL
 from multiprocessing import Process, Queue
 import logging
 import re
-import shlex
 
 from audio_controller import envvars
 from audio_controller import soundcard
@@ -24,19 +23,23 @@ def sanitize_bitrate(raw: str) -> str:
     return raw if _BITRATE_RE.match(raw) else "64K"
 
 
-def ffmpeg_input_for_url(url: str) -> str:
-    """'-i <shell-quoted-url>' — prevents shell injection via the source url (S1)."""
-    return "-i {}".format(shlex.quote(url))
+def ffmpeg_input_for_url(url: str) -> "list[str]":
+    """Return ffmpeg input argv ['-i', url]. The url is a single argv element, so
+    there is no shell and no token splitting/injection via the source url (S1/S6)."""
+    return ["-i", url]
 
 
-def ffmpeg_output_for_url(raw_url: str) -> str:
-    """Parse 'url;bitrate' and return injection-safe ffmpeg output args (S1)."""
+def ffmpeg_output_for_url(raw_url: str) -> "list[str]":
+    """Parse 'url;bitrate' and return injection-safe ffmpeg output argv (S1/S6).
+    Every value is a separate argv element; the url is the single trailing token."""
     parts = raw_url.split(";")
     url = parts[0]
     bitrate = sanitize_bitrate(parts[1]) if len(parts) > 1 and parts[1] else "64K"
-    content_type = "-content_type audio/mpeg -f mp3"
-    bitrate_ = "-b:a {b} -minrate {b} -maxrate {b} -bufsize {b}".format(b=bitrate)
-    return "{} {} {}".format(content_type, bitrate_, shlex.quote(url))
+    return [
+        "-content_type", "audio/mpeg", "-f", "mp3",
+        "-b:a", bitrate, "-minrate", bitrate, "-maxrate", bitrate, "-bufsize", bitrate,
+        url,
+    ]
 
 
 def print_info(msg):
@@ -49,20 +52,22 @@ def print_info(msg):
 #
 
 
-def execute_ffmpeg(command: str, queue: Queue, testing=False):
-    """Execute ffmpeg command, until queue gets message. Retry when command exits."""
-    # 'exec' is needed to be able to easily stop/terminate the process
-    cmd = f"exec {command} >/dev/null 2>&1"
-    sleeptime = 3
-    if testing:  # for testing, give full output:
-        cmd = f"exec {command}"
-        sleeptime = 10
+def execute_ffmpeg(command, queue: Queue, testing=False):
+    """Execute the ffmpeg argv `command` (a list[str]), until the queue gets a
+    message. Retry when the command exits.
+
+    The command is an argv list run WITHOUT a shell (no shell=True), so a source
+    or destination url can never inject shell syntax (S1/S6). Popen is ffmpeg
+    itself, so proc.terminate() stops it directly (no exec-through-shell needed)."""
+    sleeptime = 10 if testing else 3
+    # discard ffmpeg output in normal operation; show it when testing
+    out = None if testing else DEVNULL
     proc = None
 
     def create_process():
         nonlocal proc
         print_info(f"execute_ffmpeg create_process: {command}")
-        proc = Popen(args=cmd, stdin=None, stdout=None, stderr=None, cwd=None, bufsize=0, shell=True)
+        proc = Popen(command, stdin=None, stdout=out, stderr=out, cwd=None, bufsize=0)
 
     create_process()
 
@@ -142,9 +147,9 @@ class ReadFromUrl:
 
     def _run(self, url):
         """Create and return process to read audio from url and send to default soundcard"""
-        format_ = "-f alsa"
         output = soundcard.get_real_play_device()
-        return FfmpegProcess("ffmpeg {} {} {}".format(ffmpeg_input_for_url(url), format_, output), testing=False)
+        cmd = ["ffmpeg"] + ffmpeg_input_for_url(url) + ["-f", "alsa", output]
+        return FfmpegProcess(cmd, testing=False)
 
 
 class SendToUrlsSimple:
@@ -167,11 +172,10 @@ class SendToUrlsSimple:
             self.process_send = (urls, self.get_send_process(urls))
 
     def get_send_process(self, urls: "list[str]"):
-        format_ = "-f alsa"
         input_device = soundcard.get_real_record_device()
-        input = f"{format_} -i {input_device}"
-        outputs = " ".join(ffmpeg_output_for_url(url) for url in urls)
-        cmd = f"ffmpeg {input} {outputs}"
+        cmd = ["ffmpeg", "-f", "alsa", "-i", input_device]
+        for url in urls:
+            cmd += ffmpeg_output_for_url(url)
         return FfmpegProcess(cmd)
 
 
@@ -208,12 +212,9 @@ class SendToUrls:
         Read from real soundcard and play on multiple virtual soundcard subdevices
         """
         input_device = soundcard.get_real_record_device()
-        format_ = "-f alsa"
-        input = f"{format_} -i {input_device}"
-        output_devices = soundcard.get_virtual_play_devices()
-        outputs = [f"-f alsa {output}" for output in output_devices]
-        outputs = " ".join(outputs)
-        cmd = f"ffmpeg {input} {outputs}"
+        cmd = ["ffmpeg", "-f", "alsa", "-i", input_device]
+        for output in soundcard.get_virtual_play_devices():
+            cmd += ["-f", "alsa", output]
         return FfmpegProcess(cmd)
 
     def start_stop_send(self):
@@ -246,10 +247,7 @@ class SendToUrls:
                     pass  # TODO log warning: too many url destinations specified, max = ...
 
     def get_send_process(self, input_device, url):
-        format_ = "-f alsa"
-        input = f"{format_} -i {input_device}"
-        output = ffmpeg_output_for_url(url)
-        cmd = f"ffmpeg {input} {output}"
+        cmd = ["ffmpeg", "-f", "alsa", "-i", input_device] + ffmpeg_output_for_url(url)
         return FfmpegProcess(cmd)
 
 
