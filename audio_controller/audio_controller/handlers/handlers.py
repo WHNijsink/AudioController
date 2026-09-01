@@ -580,6 +580,7 @@ class Camera(BaseHandler):
             try:
                 args = self.body_to_json()
                 cam = settings.cameras[args['id']]
+                cam.active = "0"
                 cam.set_focus_mode()
                 cam.move_direction(args["direction"])
                 result = {
@@ -597,6 +598,7 @@ class Camera(BaseHandler):
             try:
                 args = self.body_to_json()
                 cam = settings.cameras[args['id']]
+                cam.active = "0"
                 cam.move_stop()
                 result = {
                     "success": True,

@@ -256,8 +256,6 @@ input:checked + .slider:before {
 #live,
 #footer {
 	margin: 10px 0;
-  float: left;
-  width: 66%;
 }
 #live {
   position: relative;
@@ -285,11 +283,8 @@ input:checked + .slider:before {
 }
 #presets,
 #move{
-  clear: right;
-  float: right;
 	padding: 0 15px;
 	text-align: center;
-  width: 34%;
 }
 
 #cams ul,
