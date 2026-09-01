@@ -164,7 +164,7 @@ class SourcesDestinations(ElementWrapper):
                                 E('label').attr('style', 'white-space: nowrap;').append(
                                     radio_button,
                                     E('span').inner_html("  "),
-                                    E('span').inner_html(s['name'])
+                                    E('span').text(s['name'])
                                 )
                             ),
                             E('div').attr('class', 'col-sm-3').append(volume_span)
@@ -186,7 +186,7 @@ class SourcesDestinations(ElementWrapper):
                                     E('span').attr('class', 'slider round')
                                 ),
                                 E('span').inner_html("  "),
-                                E('span').inner_html(d['name'])
+                                E('span').text(d['name'])
                             )
                         )
                     )

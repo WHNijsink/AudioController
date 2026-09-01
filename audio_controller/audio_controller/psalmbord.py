@@ -56,7 +56,10 @@ class Psalmbord:
         content = ""
         for r in regels:
             css = "regel font_weight"
-            css += f" {fonts.fonts[self.fontfamily]}"
+            # defensive: fall back to the default font class if an invalid
+            # fontfamily was ever persisted, so the public board cannot be
+            # DoS'd by a KeyError.
+            css += f" {fonts.fonts.get(self.fontfamily) or fonts.fonts[default_fontfamily]}"
             if r.startswith('_'):
                 css += " title"
                 r = r[1:]
@@ -103,11 +106,15 @@ class Psalmbord:
             refreshrate = int(refreshrate)
         )
 
-        if not fonts.validate_font_name(self.fontfamily, True):
+        # Validate the INCOMING values (temp), not the already-stored self.*
+        # (which are always valid, making the check a no-op). Reject the update
+        # if a font value is outside the allowlist, so an invalid fontfamily can
+        # never reach the board CSS class / camera-page font-family.
+        if not fonts.validate_font_name(temp.fontfamily):
             return None
-        if not fonts.validate_font_size(self.fontsize, True):
+        if not fonts.validate_font_size(temp.fontsize):
             return None
-        if not fonts.validate_font_weight(self.fontweight, True):
+        if not fonts.validate_font_weight(temp.fontweight):
             return None
 
         self.fontfamily = temp.fontfamily

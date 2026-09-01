@@ -95,7 +95,7 @@ class Page(ElementWrapper):
 
             ul = E('ul')
             for index, cam in enumerate(self.cameras):
-                btn = E('button').inner_html(cam['name']).attr('value',index).attr('class','btn btn-primary')
+                btn = E('button').text(cam['name']).attr('value',index).attr('class','btn btn-primary')
                 btn.element.onclick = btn_presets
 
                 ul.append(
@@ -184,7 +184,7 @@ class Page(ElementWrapper):
                 else:
                     ul = E('ul')
                     for pr in presets['presets']:
-                        btn = E('button').attr('name','p').attr('value',pr['token']).attr('class','btn btn-primary preset_'+pr['token']).inner_html(pr['token'])
+                        btn = E('button').attr('name','p').attr('value',pr['token']).attr('class','btn btn-primary preset_'+pr['token']).text(pr['token'])
                         btn.element.onclick = goto_preset
                         lbl = E('input').attr('type','text').attr('id',pr['token']).attr('value',pr['label']).attr('class','form-control')
                         lbl.element.onchange = setPresetLabel
@@ -215,7 +215,7 @@ class Page(ElementWrapper):
                     ''')
                 else:
                     div_live_err.append(
-                        E('p').inner_html(uri['error'])
+                        E('p').text(uri['error'])
                     )
 
         async def checkActivePreset():

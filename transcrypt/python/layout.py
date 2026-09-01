@@ -15,7 +15,7 @@ home.element.onclick = lambda evt: utils.redirect_relative("")
 
 
 def set_title(title):
-    home.inner_html(title)
+    home.text(title)
     window.document.title = title
 
 

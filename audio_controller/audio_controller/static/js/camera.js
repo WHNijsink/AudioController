@@ -89,7 +89,11 @@ $(function() {
 
 					$index = 0;
 					for(let $item of $cameras){
-						$('#cams ul').append('<li><button value="'+$index+'"'+($index==0?" class='active'":"")+'>'+$item.name+'</button></li>');
+						var $button = $('<button>').attr('value', $index).text($item.name);
+						if( $index == 0 ){
+							$button.addClass('active');
+						}
+						$('#cams ul').append( $('<li>').append($button) );
 						$index++;
 					}
 
@@ -141,7 +145,14 @@ $(function() {
 
 					// add preset buttons to dom
 					for(let $item of $response.presets){
-						$('#presets ul').append('<li'+($toggleLabels?'':' class="basic"')+'><button value="'+$item.token+'" class="preset_'+$item.token+'">'+$item.token+'</button><span class="label"> '+$item.label+'</span></li>');
+						var $li = $('<li>');
+						if( !$toggleLabels ){
+							$li.addClass('basic');
+						}
+						var $button = $('<button>').attr('value', $item.token).addClass('preset_' + $item.token).text($item.token);
+						var $span = $('<span>').addClass('label').text(' ' + $item.label);
+						$li.append($button).append($span);
+						$('#presets ul').append($li);
 					}
 					$('#move, #presets, #footer').show();
 					
