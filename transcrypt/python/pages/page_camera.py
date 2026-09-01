@@ -76,10 +76,16 @@ class Page(ElementWrapper):
 
         self.append(
             div_cams,
-            div_live,
-            div_presets,
-            div_move,
-            div_footer
+            E('div').attr('class','row').append(
+                E('div').attr('class','col-md-6 col-lg-8').append(
+                    div_live,
+                    div_footer
+                ),
+                E('div').attr('class','col-md-6 col-lg-4').append(
+                    div_presets,
+                    div_move
+                )
+            )
         )
 
         # functies
