@@ -109,3 +109,28 @@ class Hardening(AsyncHTTPTestCase):
         # public hosts and ALSA ports remain valid
         assert settings.validate_source_attribute("port_url", "http://ro1.reformatorischeomroep.nl:8003/live")
         assert settings.validate_source_attribute("port_url", "IN1") == "IN1"
+
+    # ---- camera role == what camera.js sends; only non-camera.js actions are admin ----
+    def test_camera_role_matches_camera_app(self):
+        t, ck = self._prime()
+        auth, _ = self._login("cam", "CamPw", t, ck, referer="http://x/camera")
+        # setPresetLabel is NOT called by camera.js (admin screen only) -> admin-only
+        r1 = self._post("/camera/setPresetLabel", {"id": 0, "token": "1", "label": "x"},
+                        t, ck + "; " + auth, referer="http://x/camera")
+        self.assertEqual(json.loads(r1.body).get("error"), "Geen rechten")
+        # setStreamPublish IS called by camera.js -> allowed for the camera role.
+        # Stub the device call so we test the authz boundary, not the network.
+        settings.cameras[0].set_stream_publish = lambda enable: True
+        r2 = self._post("/camera/setStreamPublish", {"id": 0, "publish": True},
+                        t, ck + "; " + auth, referer="http://x/camera")
+        self.assertNotIn("Geen rechten", r2.body.decode())
+        self.assertTrue(json.loads(r2.body).get("success"))
+
+    def test_admin_can_set_preset_label(self):
+        # restore() seeds default cameras, so id 0 exists; set_preset_label is a
+        # local (non-network) config write -> succeeds for an admin.
+        t, ck = self._prime()
+        auth, _ = self._login("admin", "AdminPw", t, ck)
+        r = self._post("/camera/setPresetLabel", {"id": 0, "token": "1", "label": "Kansel"},
+                       t, ck + "; " + auth)
+        self.assertTrue(json.loads(r.body).get("success"))

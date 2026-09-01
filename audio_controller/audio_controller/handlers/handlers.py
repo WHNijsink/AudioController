@@ -563,7 +563,12 @@ class Camera(BaseHandler):
                     "cameras": [cam_dict(obj) for obj in settings.cameras]
                 }))
 
-        if action == "setCameras":
+        # The camera-role user may do everything the camera app (camera.js) sends:
+        # get/goto presets, PTZ (moveStart/moveStop), live, get/setStreamPublish
+        # and reboot. Only actions that are NOT in camera.js are admin-only:
+        # setCameras (add cameras / IPs / ONVIF credentials) and setPresetLabel
+        # (rename a preset) -- both live in the admin settings screen.
+        if action in ("setCameras", "setPresetLabel"):
             if self.login_required() and not self.current_user_is_admin():
                 self.write(dumps({"success": False, "error": "Geen rechten"}))
                 return
