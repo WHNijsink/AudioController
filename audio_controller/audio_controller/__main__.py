@@ -144,9 +144,13 @@ def main():
         # listen on 2 ports: 5000 loopback-only (trusted, no login) and
         # 8080 external (login required). Trust follows the port, not the Host header (S4).
         port_address = [(5000, "127.0.0.1", True), (8080, "0.0.0.0", False)]
+        # Cap request bodies so an unauthenticated client cannot exhaust memory on
+        # the Pi via a huge POST (e.g. to /psalmbord). Settings uploads are a few
+        # KB; 5 MB is generous. (DoS hardening)
+        max_body_size = 5 * 1024 * 1024
         for port, address, local_no_login in port_address:
             app = make_app(local_no_login)
-            app.listen(port=port, address=address)
+            app.listen(port=port, address=address, max_body_size=max_body_size)
             msg = f"Listening on {address}:{port}"
             print(msg)
             main_logger.info(msg)

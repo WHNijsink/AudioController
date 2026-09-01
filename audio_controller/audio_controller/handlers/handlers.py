@@ -19,6 +19,7 @@ from copy import deepcopy
 import socketio
 import tornado
 import tornado.web
+import tornado.ioloop
 
 # import tornado.websocket
 
@@ -27,6 +28,40 @@ from audio_controller import settings, controller, user, loggers, gpio, psalmbor
 
 here = Path(os.path.dirname(__file__)).resolve()
 main_logger = logging.getLogger("main")
+
+
+async def _run_blocking(func):
+    """Run a blocking device-I/O callable off the IOLoop, so one slow or
+    unreachable camera cannot stall the whole server -- all listening ports share
+    a single event loop. (C: event-loop starvation DoS)"""
+    return await tornado.ioloop.IOLoop.current().run_in_executor(None, func)
+
+
+# --- simple in-memory login throttling (E: brute-force hardening) ---
+# PBKDF2 already slows guessing; this adds a temporary lockout after repeated
+# failures. State is per-process (one process serves all ports); a successful
+# login clears it.
+_LOGIN_MAX_FAILURES = 10
+_LOGIN_LOCKOUT_SECONDS = 60
+_login_failures = {}  # username -> [failure_count, locked_until_ts]
+
+
+def _login_locked(username):
+    rec = _login_failures.get(username)
+    return bool(rec) and rec[1] > time.time()
+
+
+def _login_record_failure(username):
+    rec = _login_failures.get(username, [0, 0.0])
+    rec[0] += 1
+    if rec[0] >= _LOGIN_MAX_FAILURES:
+        rec[1] = time.time() + _LOGIN_LOCKOUT_SECONDS
+        rec[0] = 0
+    _login_failures[username] = rec
+
+
+def _login_reset(username):
+    _login_failures.pop(username, None)
 
 
 class BaseHandler(tornado.web.RequestHandler):
@@ -56,6 +91,12 @@ class BaseHandler(tornado.web.RequestHandler):
             "Access-Control-Allow-Headers",
             "Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Xsrftoken",
         )
+        # defense-in-depth headers (F): stop MIME sniffing and cross-origin framing
+        # (clickjacking). A full CSP is intentionally not set here because the
+        # camera page must load media from the camera device's own origin.
+        self.set_header("X-Content-Type-Options", "nosniff")
+        self.set_header("X-Frame-Options", "SAMEORIGIN")
+        self.set_header("Referrer-Policy", "same-origin")
 
     def get_current_user(self):
         """Overrides method, gets called ones when accessing 'self.current_user'"""
@@ -65,7 +106,11 @@ class BaseHandler(tornado.web.RequestHandler):
         return r
 
     def set_cookie_username(self, username: str = ""):
-        self.set_secure_cookie("audio_controller_user", username.encode("utf-8"))
+        # httponly: the auth cookie is used server-side only, so keeping it out of
+        # document.cookie limits session theft via any XSS; samesite=Lax is extra
+        # CSRF hardening. (No secure=True: the app is served over plain HTTP.)
+        self.set_secure_cookie("audio_controller_user", username.encode("utf-8"),
+                               httponly=True, samesite="Lax")
 
     def logged_in(self):
         """Return True if user is logged in, False otherwise."""
@@ -197,7 +242,15 @@ class Login(BaseHandler):
             return
 
         def write_users():
-            self.write(dumps([asdict(obj) for obj in settings.users]))
+            # Never expose password hashes to the client (D). The admin grid does
+            # not prefill the password field; a blank password on the way back
+            # means "keep existing" (see settings.update_users).
+            out = []
+            for obj in settings.users:
+                d = asdict(obj)
+                d["password"] = ""
+                out.append(d)
+            self.write(dumps(out))
 
         if action == "login":
             # check if already logged in (reading cookie)
@@ -212,7 +265,16 @@ class Login(BaseHandler):
             # if 'username' in args and 'password' in args:
             username = str(args.get("username"))
             password = str(args.get("password"))
+            # brute-force throttling on the external port (E)
+            if self.login_required() and _login_locked(username):
+                msg = f"Login temporarily locked for user {username}"
+                print(msg)
+                main_logger.info(msg)
+                self.write(dumps({"success": False,
+                                  "error": "Te veel mislukte pogingen, probeer het later opnieuw"}))
+                return
             if self.check_user(username, password):
+                _login_reset(username)
                 msg = f"Login user {username}"
                 print(msg)
                 main_logger.info(msg)
@@ -221,6 +283,7 @@ class Login(BaseHandler):
                 self.write(dumps({"success": True,
                                   "must_change_password": bool(usr and usr.must_change_password)}))
             else:
+                _login_record_failure(username)
                 msg = f"Login failed for user {username}"
                 print(msg)
                 main_logger.info(msg)
@@ -238,29 +301,52 @@ class Login(BaseHandler):
         elif action == 'setUsers':
             args = self.body_to_json()
             users = args.get("users", [])
-            settings.update_users(users)
+            try:
+                settings.update_users(users)
+            except Exception:
+                # e.g. duplicate usernames are rejected by update_users
+                self.write(dumps({"success": False, "error": "Ongeldige gebruikerslijst"}))
+                return
             write_users()
             await notify_change()
 
         elif action == 'setUser':
             args = self.body_to_json()
-            users = deepcopy(settings.users)
+            new_username = str(args.get("username", ""))
+            new_password = str(args.get("password", ""))
+            if not new_username or not new_password:
+                self.write(dumps({"success": False}))
+                return
 
+            # Reject weak/default passwords so the forced first-login change (and
+            # any self-service change) cannot re-set the shipped default. (E)
+            if new_password.lower() in ("admin", "password") or new_password == new_username:
+                self.write(dumps({"success": False,
+                                  "error": "Kies een sterker wachtwoord"}))
+                return
+
+            # A user may only rename to a name not already owned by a DIFFERENT
+            # account. Authorization resolves a user by username (first match), so
+            # a duplicate would bind this session to another (possibly admin) row
+            # -> privilege escalation. Fail closed. (security)
+            for usr in settings.users:
+                if usr.username == new_username and usr.username != self.current_user:
+                    self.write(dumps({"success": False, "error": "Gebruikersnaam bestaat al"}))
+                    return
+
+            users = deepcopy(settings.users)
             for usr in users:
                 if usr.username == self.current_user:
-                    usr.username = args['username']
-                    usr.password = args['password']
+                    usr.username = new_username
+                    usr.password = new_password
 
             try:
                 settings.update_users([vars(u) for u in users])
-                result = {
-                    "success": True,
-                }
-            except Exception as err:
-                result = {
-                    "success": False,
-                    #"error": str(err)
-                }
+                # keep the session valid after a self-rename (cookie holds the name)
+                self.set_cookie_username(new_username)
+                result = {"success": True}
+            except Exception:
+                result = {"success": False}
             self.write(dumps(result))
             await notify_change()
 
@@ -487,17 +573,19 @@ class Camera(BaseHandler):
             return
 
         elif action == "getPresets":
-            args = self.body_to_json()
-            cam = settings.cameras[args['id']]
             result = {
                 "err": None,
                 "msg": None,
                 "presets": []
             }
-            
+
             try:
-                cam.connect()
-                result['presets'] = [asdict(p) for p in cam.load_presets()]
+                args = self.body_to_json()
+                cam = settings.cameras[args['id']]
+                def _work():
+                    cam.connect()
+                    return [asdict(p) for p in cam.load_presets()]
+                result['presets'] = await _run_blocking(_work)
             except ConnectionError as err:
                 result['err'] = 'connection'
                 #result['msg'] = str(err)
@@ -509,20 +597,24 @@ class Camera(BaseHandler):
             return
 
         elif action == "getActivePreset":
+            # return proper JSON with a json content-type (F: was raw text/html)
+            self.set_header("Content-Type", "application/json")
             try:
                 args = self.body_to_json()
                 cam = settings.cameras[args['id']]
-                self.write( cam.active )
+                self.write(dumps(cam.active))
             except Exception as err:
-                self.write("err")
+                self.write(dumps(""))
 
         elif action == "gotoPreset":
             try:
                 args = self.body_to_json()
                 cam = settings.cameras[args['id']]
                 cam.active = str(args['preset'])
-                cam.goto_preset( cam.active )
-                settings.save()
+                def _work():
+                    cam.goto_preset(cam.active)
+                    settings.save()
+                await _run_blocking(_work)
                 result = {
                     "success": True
                 }
@@ -562,7 +654,7 @@ class Camera(BaseHandler):
             try:
                 args = self.body_to_json()
                 cam = settings.cameras[args['id']]
-                live = cam.get_stream_uri()
+                live = await _run_blocking(cam.get_stream_uri)
                 result = {
                     "success": True,
                     "uri": live
@@ -581,8 +673,11 @@ class Camera(BaseHandler):
                 args = self.body_to_json()
                 cam = settings.cameras[args['id']]
                 cam.active = "0"
-                cam.set_focus_mode()
-                cam.move_direction(args["direction"])
+                direction = args["direction"]
+                def _work():
+                    cam.set_focus_mode()
+                    cam.move_direction(direction)
+                await _run_blocking(_work)
                 result = {
                     "success": True,
                 }
@@ -599,7 +694,7 @@ class Camera(BaseHandler):
                 args = self.body_to_json()
                 cam = settings.cameras[args['id']]
                 cam.active = "0"
-                cam.move_stop()
+                await _run_blocking(cam.move_stop)
                 result = {
                     "success": True,
                 }
@@ -623,7 +718,7 @@ class Camera(BaseHandler):
                 args = self.body_to_json()
                 cam = settings.cameras[args['id']]
                 result = {
-                    "success": cam.get_stream_publish()
+                    "success": await _run_blocking(cam.get_stream_publish)
                 }
             except Exception as err:
                 result = {
@@ -637,7 +732,8 @@ class Camera(BaseHandler):
             try:
                 args = self.body_to_json()
                 cam = settings.cameras[args['id']]
-                cam.set_stream_publish(args['publish'])
+                publish = args['publish']
+                await _run_blocking(lambda: cam.set_stream_publish(publish))
                 result = {
                     "success": True,
                 }
@@ -654,8 +750,10 @@ class Camera(BaseHandler):
                 args = self.body_to_json()
                 cam = settings.cameras[args['id']]
                 cam.active = "0"
-                settings.save()
-                cam.reboot()
+                def _work():
+                    settings.save()
+                    cam.reboot()
+                await _run_blocking(_work)
                 result = {
                     "success": True,
                 }
@@ -688,8 +786,18 @@ class Psalmbord(tornado.web.RequestHandler):
             return {}
     
     def get_css(self):
-        fs = settings.pb.fontsize
-        fw = settings.pb.fontweight
+        # Coerce to int: fontsize/fontweight are int-cast on the setPsalmbord
+        # path, but a crafted settings *import* can store an arbitrary string.
+        # Forcing int here prevents breaking out of the inline <style> and
+        # injecting script on the public board (defense in depth for S3).
+        try:
+            fs = int(settings.pb.fontsize)
+        except (TypeError, ValueError):
+            fs = psalmbord.default_fontsize
+        try:
+            fw = int(settings.pb.fontweight)
+        except (TypeError, ValueError):
+            fw = psalmbord.default_fontweight
         return f"html {{ --regels: {fs}; }} \n .font_weight {{ font-weight: {fw}; }}"
 
     def get(self):

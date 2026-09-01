@@ -1,7 +1,6 @@
 """ """
 
-import random
-import string
+import secrets
 import hashlib
 import hmac
 import os, sys
@@ -19,6 +18,12 @@ for file in [file_users, file_cookie]:
     if not file.exists():
         with open(file, 'w'):
             pass
+    # These hold the cookie-signing secret and the user records: owner-only, so a
+    # local user cannot read the secret (and forge admin sessions) or the users.
+    try:
+        os.chmod(file, 0o600)
+    except OSError:
+        pass
 
 @dataclass
 class User:
@@ -109,15 +114,14 @@ def verify_password(password: str, stored: str) -> bool:
 def get_cookie_secret():
     with open(file_cookie, 'r') as f:
         lines = f.readlines()
-    if lines:
+    if lines and lines[0].strip():
         return lines[0].strip()  # remove "\n"
-    else:
-        random_string = ''.join(random.choice(string.ascii_letters) for i in range(30))
-        secret = hashlib.sha256(random_string.encode()).hexdigest()
-        with open(file_cookie, 'a') as f:
-            line = f"{secret}\n"
-            f.write(line)
-            return secret
+    # Generate with a CSPRNG (was random.choice on the Mersenne-Twister PRNG,
+    # which is not cryptographically secure). This secret signs all auth cookies.
+    secret = secrets.token_hex(32)
+    with open(file_cookie, 'w') as f:
+        f.write(f"{secret}\n")
+    return secret
 
 
 def default_users():

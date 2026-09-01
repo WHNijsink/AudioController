@@ -3,6 +3,8 @@ import sys, traceback
 import os
 import json
 import threading
+import ipaddress
+from urllib.parse import urlparse
 from typing import List
 from pathlib import Path
 import pickle
@@ -231,6 +233,13 @@ def load():
                 store = pickle.loads(f.read())
             use_from_store(store)
             save()  # now persisted as json
+            # Remove the legacy pickle so it can never be read again. pickle.loads
+            # is RCE if an attacker can plant this file and the json is later
+            # removed; deleting it after a successful migration closes that.
+            try:
+                _legacy_pickle_file.unlink()
+            except OSError:
+                pass
             return True
         except Exception:
             return False
@@ -246,6 +255,12 @@ def save():
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
+        # The settings file holds user password hashes and cleartext camera
+        # credentials: keep it owner-only so a local user cannot read secrets.
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass
         os.replace(tmp, file)
 
 
@@ -342,6 +357,25 @@ def is_file(value: str):
     return value.startswith("file")
 
 
+def _is_internal_host(value: str) -> bool:
+    """ True if an http(s)/icecast url points at a loopback, private or link-local
+    host. Streams should only reach external services, so block internal targets
+    to reduce SSRF. Hostnames (non-literal IPs) are allowed (no DNS lookup). (F) """
+    try:
+        host = urlparse(value).hostname or ""
+    except Exception:
+        return False
+    if not host:
+        return False
+    if host.lower() in ("localhost", "localhost.localdomain"):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved
+
+
 def validate_settings(obj: Settings):
     """ Return True if settings are correct, False otherwise. Only check values, not types. Possibly correct values. """
     obj.nr_IN_ports = max(1, min(100, obj.nr_IN_ports))
@@ -379,8 +413,9 @@ def validate_source_attribute(name: str, value):
         elif name == 'port_url':
             if not (is_IN_port(value) or is_url(value)):
                 return None
-            else:
-                return value.strip()
+            if is_url(value) and _is_internal_host(value):
+                return None  # block SSRF to internal hosts (F)
+            return value.strip()
         elif name == 'scan_prio':
             value = max(-1, min(100, value))
         elif name == 'db_level':
@@ -399,6 +434,8 @@ def validate_destination_attribute(name: str, value):
         elif name == 'port_url_file':  # must be IN port
             if not (is_OUT_port(value) or is_url(value) or is_file(value)):
                 return None
+            if is_url(value) and _is_internal_host(value):
+                return None  # block SSRF to internal hosts (F)
         return value
     except:
         return None
@@ -436,9 +473,14 @@ def update_settings(obj: dict):
     """ Update both cached and saved settings with values from 'obj'. """
     # dictonary with key, value = attribute-name, type
     annot = Settings.__annotations__
+    # server-managed fields the client must never set (e.g. the migration
+    # version, which could force a downgrade that resets settings on restart) (F)
+    server_managed = {"version"}
     backup = Settings()
     backup.__init__(**asdict(settings))
     for attr in annot.keys():
+        if attr in server_managed:
+            continue
         if attr in obj:
             try:
                 value = annot[attr](obj[attr])  # cast value to type
@@ -535,34 +577,47 @@ def update_cameras(new_cameras: List[dict]):
 
 def update_users(new_users: List[dict]):
     try:
+        # index current users by username so a password change is detected by
+        # identity, not list position (a reorder/insert no longer re-hashes the
+        # wrong user's stored hash), and a blank password means "keep existing".
+        # The client is never sent the hash (D), so blank is the normal case for
+        # an unchanged user.
+        existing = {u.username: u for u in users}
         new_list = []
 
-        for i, obj in enumerate(new_users):
+        for obj in new_users:
             usr = user.User(**obj)
-
-            try:
-                setPassword = usr.password != users[i].password
-                # password is changed
-            except IndexError:
-                setPassword = True
-                # password is new
-
-            if setPassword:
-                usr.password = validate_user_attribute("password", usr.password)
-                usr.password = user.hash_password(usr.password)  # salted (was unsalted blake2b)
-                usr.must_change_password = False  # a real password was just set
-            else:
-                # keep the server-side forced-change flag when the password is unchanged
-                try:
-                    usr.must_change_password = users[i].must_change_password
-                except IndexError:
-                    pass
-
             usr.username = validate_user_attribute("username", usr.username)
+            prior = existing.get(usr.username)
+            incoming_pw = usr.password
+
+            if not incoming_pw or (prior is not None and incoming_pw == prior.password):
+                # blank or unchanged -> keep the stored (already hashed) password
+                if prior is not None:
+                    usr.password = prior.password
+                    usr.must_change_password = prior.must_change_password
+                else:
+                    # brand-new user without a password: hash whatever was given
+                    usr.password = user.hash_password(validate_user_attribute("password", incoming_pw))
+                    usr.must_change_password = False
+            else:
+                # a new plaintext password was provided -> salt+hash it
+                usr.password = validate_user_attribute("password", incoming_pw)
+                usr.password = user.hash_password(usr.password)
+                usr.must_change_password = False
+
             usr.admin = usr.admin or usr.admin == "True"
             usr.camera = usr.camera or usr.camera == "True"
 
             new_list.append(usr)
+
+        # Authorization resolves a user by username (current_user_is_admin /
+        # get_user use the first match), so duplicate usernames would let a
+        # low-privilege session bind to a higher-privileged row. Reject any
+        # write that would create a duplicate. (security)
+        names = [u.username for u in new_list]
+        if len(names) != len(set(names)):
+            raise ValueError("duplicate usernames are not allowed")
 
         users[:] = new_list
         save()
