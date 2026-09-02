@@ -34,31 +34,6 @@ class User:
     must_change_password: bool = False
 
 
-def clear_users():
-    with open(file_users, 'w') as f:
-        f.writelines([])
-
-
-def add_user(username: str, password: str):
-    assert ";" not in username
-    pw = encryptPassword(password)
-    line = f"{username};{pw}\n"
-    with open(file_users, 'a') as f:
-        f.write(line)
-
-
-def check_user(username: str, password: str):
-    pw = encryptPassword(password)
-    with open(file_users, 'r') as f:
-        lines = f.readlines()
-    for line in lines:
-        [username_, pw_] = line.split(";")
-        pw_ = pw_.strip()  # remove "\n"
-        if username == username_ and pw == pw_:
-            return True
-    return False
-
-
 def get_users():
     users: list[User] = []
 
