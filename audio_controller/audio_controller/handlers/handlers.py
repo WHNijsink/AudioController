@@ -33,8 +33,17 @@ main_logger = logging.getLogger("main")
 async def _run_blocking(func):
     """Run a blocking device-I/O callable off the IOLoop, so one slow or
     unreachable camera cannot stall the whole server -- all listening ports share
-    a single event loop. (C: event-loop starvation DoS)"""
-    return await tornado.ioloop.IOLoop.current().run_in_executor(None, func)
+    a single event loop. (C: event-loop starvation DoS)
+
+    Any exception is logged with its traceback to the 'main' log file before it is
+    re-raised, so a failing camera/ONVIF call is debuggable even though the caller
+    turns it into a {"success": false} response. No detail is returned to the
+    client (that would leak internals); the full traceback goes to the log only."""
+    try:
+        return await tornado.ioloop.IOLoop.current().run_in_executor(None, func)
+    except Exception:
+        main_logger.exception("camera device call failed")
+        raise
 
 
 # --- simple in-memory login throttling (E: brute-force hardening) ---
@@ -646,11 +655,10 @@ class Camera(BaseHandler):
                     "success": True
                 }
 
-            except Exception as err:
+            except Exception:
+                main_logger.exception("setPresetLabel failed")
                 result = {
                     "success": False,
-                    #"error": str(err),
-                    #"traceback": traceback.format_exc()
                 }
             self.write(dumps(result))
             return

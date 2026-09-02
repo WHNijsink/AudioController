@@ -1,7 +1,8 @@
 """ Module which handles settings, which are configurable and thus persistent """
-import sys, traceback
+import sys
 import os
 import json
+import logging
 import threading
 import ipaddress
 from urllib.parse import urlparse
@@ -12,6 +13,8 @@ from dataclasses import dataclass, field, asdict
 import hashlib
 
 from . import fonts, camera, user, psalmbord
+
+main_logger = logging.getLogger("main")
 
 #
 # Classes and default settings
@@ -572,7 +575,7 @@ def update_cameras(new_cameras: List[dict]):
         cameras[:] = new_list
         save()
     except Exception:
-        print(traceback.format_exc())
+        main_logger.exception("settings write failed")
         raise
 
 def update_users(new_users: List[dict]):
@@ -622,7 +625,7 @@ def update_users(new_users: List[dict]):
         users[:] = new_list
         save()
     except Exception:
-        print(traceback.format_exc())
+        main_logger.exception("settings write failed")
         raise
 
 def test():
