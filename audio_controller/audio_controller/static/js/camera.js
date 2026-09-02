@@ -19,7 +19,7 @@ $(function() {
 	* get login
 	*/
 	function getLogin(){
-		$('#login, #cams, #presets, #live, #move, #footer, #user').hide();
+		$('#login, #cams, #presets, #live, #live video, #move, #footer, #user').hide();
 
 		$.ajax({
 			url: "/login/login",
@@ -138,6 +138,7 @@ $(function() {
 			}),
 			success: function($response){ 
 				if( $response.err == 'connection' ){
+					$('#live').show();
 					$('#live .alert').text("Camera is niet beschikbaar.").show();
 				} else {
 					// clear preset buttons

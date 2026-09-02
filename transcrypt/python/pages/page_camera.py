@@ -122,6 +122,7 @@ class Page(ElementWrapper):
                 evt.currentTarget.classList.remove("btn-primary")
                 evt.currentTarget.classList.add("btn-success")
             else:
+                self.camid = 0
                 btn = div_cams.element.querySelector("button")
                 btn.classList.remove("btn-primary")
                 btn.classList.add("btn-success")

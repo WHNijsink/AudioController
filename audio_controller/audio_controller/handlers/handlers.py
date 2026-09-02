@@ -560,7 +560,10 @@ class Camera(BaseHandler):
             # camera-only session lists/controls cameras but must not read the
             # stored passwords (S9)
             if self.login_required() and not self.current_user_is_admin():
+                d.pop("username", None)
                 d.pop("password", None)
+                d.pop("url_intern", None)
+                d.pop("port_onvif", None)
             return d
 
         def write_cameras(setCameras = False):
