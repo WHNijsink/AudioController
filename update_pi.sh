@@ -36,11 +36,15 @@
 # wordt hij aangemaakt. Vereist internet op de Pi; met --no-deps sla je dit over.
 # De optionele GPIO-packages (gpiozero, rpi.gpio; README stap 2.3) blijven handwerk.
 #
-# Naast ~/AudioController/ gaat ook de config uit de home-map mee, in de submap home/:
-# ~/.audio_controller_settings.json (settings/sources/destinations/psalmbord/cameras/users),
-# ~/.audio_controller_settings.pickle (legacy, pre-1.5.0), ~/.audio_controller_users.txt
-# en ~/.audio_controller_cookie.txt. Een deploy raakt die niet aan, maar zo kun je ook
-# de instellingen van dat moment terugzetten.
+# Naast ~/AudioController/ gaat ook de config mee, in de submap home/:
+# .audio_controller_settings.json (settings/sources/destinations/psalmbord/cameras/users),
+# .audio_controller_settings.pickle (legacy, pre-1.5.0), .audio_controller_users.txt en
+# .audio_controller_cookie.txt. LET OP: de app zoekt die in Path.home() van de user
+# waaronder hij draait. De service draait als root (User=root in de unit), dus de
+# LIVE config staat in /root/, niet in /home/pi/. Het script leest de service-user uit
+# de unit en haalt de config uit diens home (via sudo). Een deploy raakt die niet aan,
+# maar zo kun je ook de instellingen van dat moment terugzetten. Een eventuele kopie
+# in /home/pi/ (van een handmatige start als pi) is NIET wat de service gebruikt.
 #
 # Wat wordt gesynct (README stap 3):
 #   ./audio_controller          -> ~/AudioController   (de package, incl. gecompileerde main.js)
@@ -187,6 +191,44 @@ healthcheck() {
     echo "http://$PI_HOST:8080/psalmbord -> $code_bord  (302 = login actief, nieuw gedrag; 200 = oude versie draait nog)"
 }
 
+service_home() {
+    # Home-map van de user waaronder de service draait (User= in de unit; leeg = root).
+    # Daar staan de .audio_controller_* bestanden die de LIVE service gebruikt.
+    "${SSH[@]}" '
+        u=$(systemctl show -p User --value '"$SERVICE"' 2>/dev/null)
+        [ -n "$u" ] || u=root
+        h=$(getent passwd "$u" | cut -d: -f6)
+        echo "$u:${h:-/root}"
+    '
+}
+
+check_instance() {
+    # Na een (her)start: precies één audio_controller-proces, en tonen als wie en met
+    # welke config die draait. Meer dan één (bijv. een handmatige start als pi naast de
+    # service) betekent poortconflicten en/of een tweede, afwijkende settings-file.
+    echo "-- controle: draaiende instantie(s)"
+    "${SSH[@]}" '
+        pids=$(pgrep -f "^python3 -m audio_controller$" | tr "\n" " ")
+        n=$(echo $pids | wc -w)
+        for p in $pids; do
+            u=$(ps -o user= -p "$p" | tr -d " ")
+            h=$(sudo -n cat /proc/$p/environ 2>/dev/null | tr "\0" "\n" | sed -n "s/^HOME=//p")
+            [ -n "$h" ] || h=$(getent passwd "$u" | cut -d: -f6)
+            f="$h/.audio_controller_settings.json"
+            info=$(sudo -n stat -c "%s bytes, %y" "$f" 2>/dev/null | cut -d. -f1 || echo "ontbreekt")
+            echo "   pid $p  user=$u  config=$f  ($info)"
+        done
+        if [ "$n" -eq 1 ]; then
+            echo "   ok: precies 1 instantie (de systemd-service)"
+        elif [ "$n" -eq 0 ]; then
+            echo "   FOUT: geen audio_controller-proces gevonden"
+        else
+            echo "   WAARSCHUWING: $n instanties! Alleen de systemd-service hoort te draaien;"
+            echo "   stop de andere (kill <pid>) en herstart daarna de service (--restart)."
+        fi
+    '
+}
+
 bevestig() {
     if [ "$ASSUME_YES" -eq 0 ]; then
         read -r -p "$1 [j/N] " antwoord
@@ -233,29 +275,35 @@ sync_files() {
 do_backup() {
     # Download de HUIDIGE Pi-bestanden naar $BACKUP_DIR/<locatie>/<timestamp>/ zodat
     # je kunt terugrollen. Zelfde exclude-set als de deploy plus de venv: alleen wat
-    # een deploy kan overschrijven wordt bewaard. Daarnaast de config-bestanden uit
-    # de home-map (~/.audio_controller_*) naar <timestamp>/home/, zodat ook de
-    # instellingen van dat moment bewaard blijven. Mislukt de backup, dan stopt alles
-    # (tenzij --no-backup): eerst veiligstellen, dan pas pushen.
-    local ts dest ssh_cmd
+    # een deploy kan overschrijven wordt bewaard. Daarnaast de config-bestanden
+    # (.audio_controller_*) uit de home-map van de SERVICE-user (root -> /root/) naar
+    # <timestamp>/home/, zodat ook de live instellingen van dat moment bewaard blijven.
+    # Mislukt de backup, dan stopt alles (tenzij --no-backup): eerst veiligstellen,
+    # dan pas pushen.
+    local ts dest ssh_cmd svc_user svc_home
     ts=$(date +%Y%m%d_%H%M%S)
     dest="$BACKUP_DIR/$LOC/$ts"
     ssh_cmd="ssh -i '$KEY' -p $PI_PORT -o ConnectTimeout=10"
+    IFS=: read -r svc_user svc_home <<< "$(service_home)"
     mkdir -p "$dest/home"
     echo "-- backup: download huidige bestanden van $DOEL"
     echo "           -> $dest"
-    # Tweede rsync: config uit de home-map via include/exclude-filter i.p.v. losse
-    # bestandsnamen, zodat een ontbrekend bestand (bijv. de legacy pickle) geen fout geeft.
+    echo "           config van service-user $svc_user uit $svc_home/ -> home/"
+    printf 'Config in deze map komt van %s (home van service-user %s) op %s.\nTerugzetten: sudo cp .audio_controller_* %s/ en daarna de service herstarten.\n' \
+        "$svc_home" "$svc_user" "$LOC" "$svc_home" > "$dest/home/HERKOMST.txt"
+    # Tweede rsync: config via include/exclude-filter i.p.v. losse bestandsnamen, zodat
+    # een ontbrekend bestand (bijv. de legacy pickle) geen fout geeft; --rsync-path met
+    # sudo omdat /root/ niet leesbaar is voor de ssh-user.
     # shellcheck disable=SC2086
     if rsync -rzt \
         --exclude="pyenv" --exclude="fontawesome*" --exclude="bootstrap*" \
         --exclude="*.pyc" --exclude="__pycache__" --exclude=".pytest_cache" --exclude="*.egg-info" \
         -e "$ssh_cmd" \
         "$PI_USER@$PI_HOST:~/AudioController/" "$dest/" \
-    && rsync -dzt \
+    && rsync -dzt --rsync-path="sudo -n rsync" \
         --include=".audio_controller_*" --exclude="*" \
         -e "$ssh_cmd" \
-        "$PI_USER@$PI_HOST:~/" "$dest/home/"; then
+        "$PI_USER@$PI_HOST:$svc_home/" "$dest/home/"; then
         local aantal
         aantal=$(ls -1d "$BACKUP_DIR/$LOC"/*/ 2>/dev/null | wc -l | tr -d ' ')
         echo "   backup klaar ($(du -sh "$dest" 2>/dev/null | cut -f1)); $aantal backup(s) bewaard voor $LOC"
@@ -333,6 +381,8 @@ case "$ACTIE" in
             echo \"temp:     \$(vcgencmd measure_temp 2>/dev/null || echo 'n.v.t.')\"
         "
         echo
+        check_instance
+        echo
         healthcheck
         ;;
 
@@ -344,6 +394,7 @@ case "$ACTIE" in
     restart)
         bevestig "Service herstarten op $DOEL?"
         "${SSH[@]}" "sudo systemctl restart $SERVICE && sleep 2 && systemctl is-active $SERVICE"
+        check_instance
         healthcheck
         ;;
 
@@ -363,6 +414,7 @@ case "$ACTIE" in
         echo "        Gebruik 'volledige deploy' (--full) als de systemd-unit is gewijzigd."
         if [ "$RESTART" -eq 1 ]; then
             "${SSH[@]}" "sudo systemctl restart $SERVICE && sleep 2 && systemctl is-active $SERVICE"
+            check_instance
         else
             echo "Service niet herstart (--no-restart); wijzigingen zijn pas actief na een herstart."
         fi
@@ -389,6 +441,7 @@ case "$ACTIE" in
             sleep 2
             systemctl is-active $SERVICE
         "
+        check_instance
         healthcheck
         ;;
 esac
