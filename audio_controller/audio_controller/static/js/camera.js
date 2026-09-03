@@ -171,7 +171,7 @@ $(function() {
 					getStreamPublish();
 
 					// set Instellingen link
-					$('#footer .caminstellingen').attr('href','http://'+$cameras[$camid].url_extern)
+					$('#footer .caminstellingen').attr('href','http://'+$cameras[$camid].url_extern+':'+$cameras[$camid].port_http)
 				}
 			}
 		});

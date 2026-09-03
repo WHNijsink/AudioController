@@ -496,10 +496,10 @@ class Cameras(AccordionItem):
         plist.add_column("name", "Naam").item_to_element(text_element.bind(None, "name"))
         plist.add_column("url_intern", "Interne IP").item_to_element(text_element.bind(None, "url_intern"))
         plist.add_column("url_extern", "Externe URL").item_to_element(text_element.bind(None, "url_extern"))
-        # HTTP en ONVIF gebruikt de Pi zelf, via de interne IP; WS gebruikt de
-        # browser, via de externe URL. Vul bij HTTP dus de poort van de camera
-        # zelf in (meestal 80), niet de router-forward van buiten.
-        plist.add_column("port_http", ":HTTP (intern)").item_to_element(number_element.bind(None, "port_http"))
+        # ONVIF gebruikt de Pi zelf, via de interne IP; HTTP en WS gebruikt de
+        # browser, via de externe URL. Vul bij HTTP dus de router-forward poort 
+        # van de camera in, om de webinterface van de camera van buiten te benaderen
+        plist.add_column("port_http", ":HTTP (extern)").item_to_element(number_element.bind(None, "port_http"))
         plist.add_column("port_onvif", ":ONVIF (intern)").item_to_element(number_element.bind(None, "port_onvif"))
         plist.add_column("port_ws", ":WS (extern)").item_to_element(number_element.bind(None, "port_ws"))
         plist.add_column("username", "Gebruikersnaam").item_to_element(text_element.bind(None, "username"))

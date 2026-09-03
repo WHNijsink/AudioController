@@ -343,7 +343,7 @@ class Camera:
             Het gedecodeerde JSON-antwoord.
         """
 
-        url = f"http://{self.url_intern}:{self.port_http}/ajaxcom"
+        url = f"http://{self.url_intern}/ajaxcom"
 
         response = requests.post(
             url,
