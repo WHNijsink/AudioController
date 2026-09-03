@@ -20,10 +20,30 @@
 #   ./update_pi.sh west --status       software/systeem-status van de Pi (wijzigt niets)
 #   ./update_pi.sh west --logs         laatste service-logregels (wijzigt niets)
 #   ./update_pi.sh west --restart      alleen de service herstarten (geen sync)
+#   ./update_pi.sh west --rollback     laatste backup terugzetten (bestanden) + service herstarten
+#   ./update_pi.sh west --rollback=20260903_211150   een specifieke backup (map of datum-tijd) terugzetten
+#   ./update_pi.sh west --rollback --with-config     ook de config (.audio_controller_*) uit de backup terugzetten
+#   ./update_pi.sh west --no-tests     preflight zonder pytest
+#   ./update_pi.sh west --skip-frontend-check   deployen ook al is main.js ouder dan de transcrypt-bronnen
 #
 # KEY=/pad/naar/key    overschrijft de ssh-key (standaard ~/.ssh/rpi_ed25519).
 # BACKUP_DIR=/pad      overschrijft de backup-map (standaard ~/AudioController_pi_backups).
 # KEEP_BACKUPS=N       houd alleen de N nieuwste backups per locatie (standaard 0 = alles bewaren).
+# TEST_HOST=u@h:p      richt alle acties op een ander adres (alleen om het script te testen).
+#
+# Preflight (update/full): pytest moet slagen (--no-tests om over te slaan), main.js moet
+# nieuwer zijn dan de transcrypt-bronnen (--skip-frontend-check), en de Pi moet bereikbaar
+# zijn. Elke ssh/rsync heeft keepalive (dode verbinding = na ~30 s een fout i.p.v. eeuwig
+# hangen) en de pip-stappen op de Pi hebben een tijdslimiet. Mislukt de herstart, dan
+# toont het script de laatste logregels en wijst het op --rollback.
+#
+# Rollback: zet de bestanden uit een backup-map terug (standaard de nieuwste) en herstart.
+# De huidige staat wordt eerst zelf gebackupt (tenzij --no-backup), dus ook een rollback is
+# omkeerbaar. Alleen met --with-config gaat ook de config uit backup/home/ terug (de service
+# wordt daarvoor gestopt, zodat de draaiende app hem niet overschrijft). Bestanden die de
+# nieuwere versie had toegevoegd blijven staan (rsync zonder --delete); voor Python is dat
+# onschadelijk. Elke deploy zet ook deploy_info.txt (branch/commit/datum) op de Pi; --status
+# toont dat, zodat je ziet wat er precies draait.
 #
 # Backup: update en volledige deploy downloaden ALTIJD eerst de huidige Pi-bestanden
 # naar $BACKUP_DIR/<locatie>/<datum-tijd>/ voordat er iets wordt overschreven (te
@@ -47,7 +67,8 @@
 # in /home/pi/ (van een handmatige start als pi) is NIET wat de service gebruikt.
 #
 # Wat wordt gesynct (README stap 3):
-#   ./audio_controller          -> ~/AudioController   (de package, incl. gecompileerde main.js)
+#   ./audio_controller          -> ~/AudioController   (de package; de nieuwste lokale main*.js
+#                                                       gaat apart mee als static/js/main.js)
 #   ./run_audio_controller.sh   -> ~/AudioController
 #   ./audio_controller.service  -> ~/AudioController    (alleen geactiveerd bij --full)
 #   ./audio_controller.html     -> ~/Desktop            (kiosk-launcher)
@@ -89,14 +110,23 @@ fi
 
 # --- argumenten ---
 LOC=""
-ACTIE=""        # update | full | backup | deps | health | status | logs | restart
+ACTIE=""        # update | full | backup | deps | health | status | logs | restart | rollback
 DRY_RUN=""
 RESTART=1
 ASSUME_YES=0
 DO_BACKUP=1     # update/full downloaden altijd eerst de huidige Pi-bestanden
 DO_DEPS=1       # update/full installeren na de sync de dependencies uit setup.py
+DO_TESTS=1      # preflight draait pytest
+CHECK_FRONTEND=1
+ROLLBACK_FROM=""    # leeg = nieuwste backup van de locatie
+ROLLBACK_CONFIG=0
 for arg in "$@"; do
     case "$arg" in
+        --rollback)   ACTIE="rollback" ;;
+        --rollback=*) ACTIE="rollback"; ROLLBACK_FROM="${arg#--rollback=}" ;;
+        --with-config) ROLLBACK_CONFIG=1 ;;
+        --no-tests)   DO_TESTS=0 ;;
+        --skip-frontend-check) CHECK_FRONTEND=0 ;;
         --dry-run)    ACTIE="update"; DRY_RUN="-n" ;;
         --no-restart) ACTIE="update"; RESTART=0 ;;
         --no-backup)  DO_BACKUP=0 ;;
@@ -143,8 +173,16 @@ fi
 PI_HOST=$(host_for "$LOC")
 PI_USER=$(user_for "$LOC")
 PI_PORT=$(port_for "$LOC")
+if [ -n "${TEST_HOST:-}" ]; then
+    # alleen voor het testen van het script: user@host:poort
+    PI_USER="${TEST_HOST%%@*}"; rest="${TEST_HOST#*@}"; PI_HOST="${rest%%:*}"; PI_PORT="${rest##*:}"
+    echo "LET OP: TEST_HOST actief, doel is $PI_USER@$PI_HOST:$PI_PORT i.p.v. $LOC"
+fi
 DOEL="$PI_USER@$PI_HOST (poort $PI_PORT)"
-SSH=(ssh -i "$KEY" -p "$PI_PORT" -o ConnectTimeout=10 "$PI_USER@$PI_HOST")
+# keepalive: een Pi die tijdens de deploy wegvalt geeft na ~30 s een fout i.p.v. een hangend script
+SSH_OPTS=(-i "$KEY" -p "$PI_PORT" -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=3)
+SSH=(ssh "${SSH_OPTS[@]}" "$PI_USER@$PI_HOST")
+SSH_E="ssh -i '$KEY' -p $PI_PORT -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=3"   # voor rsync -e
 
 # --- actie kiezen ---
 if [ -z "$ACTIE" ]; then
@@ -161,9 +199,10 @@ if [ -z "$ACTIE" ]; then
         echo "  8) status             ${DIM}versie, service, uptime, schijf, temperatuur${RESET}"
         echo "  9) logs               ${DIM}laatste 40 regels van de service${RESET}"
         echo " 10) herstart service   ${DIM}geen sync, alleen systemctl restart${RESET}"
+        echo " 11) rollback           ${DIM}laatste backup terugzetten + herstart (config alleen met --with-config)${RESET}"
         echo "  q) stoppen"
         while true; do
-            read -r -p "Keuze [1-10, q]: " k
+            read -r -p "Keuze [1-11, q]: " k
             case "$k" in
                 1) ACTIE="update"; break ;;
                 2) ACTIE="update"; DRY_RUN="-n"; break ;;
@@ -175,6 +214,7 @@ if [ -z "$ACTIE" ]; then
                 8) ACTIE="status"; break ;;
                 9) ACTIE="logs"; break ;;
                 10) ACTIE="restart"; break ;;
+                11) ACTIE="rollback"; break ;;
                 q|Q) echo "Gestopt."; exit 0 ;;
             esac
         done
@@ -240,10 +280,41 @@ bevestig() {
 }
 
 preflight() {
-    if ! ls audio_controller/audio_controller/static/js/main*.js >/dev/null 2>&1; then
-        echo "FOUT: geen gecompileerde frontend (static/js/main*.js ontbreekt)."
+    # De app hernoemt main.js bij het starten naar main-<tijdstempel>.js (cache-busting);
+    # ook de lokale pytest-run doet dat. De 'gecompileerde frontend' is dus de nieuwste
+    # niet-lege main*.js.
+    local mainjs
+    mainjs=$(ls -t audio_controller/audio_controller/static/js/main*.js 2>/dev/null | while read -r f; do [ -s "$f" ] && echo "$f" && break; done)
+    if [ -z "$mainjs" ]; then
+        echo "FOUT: geen gecompileerde frontend (static/js/main*.js ontbreekt of is leeg)."
         echo "Compileer eerst: python -m manage_env compile_on_save (zie README)."
         exit 1
+    fi
+    MAINJS="$mainjs"
+    if [ "$CHECK_FRONTEND" -eq 1 ]; then
+        # main.js moet nieuwer zijn dan alle transcrypt-bronnen, anders gaat een oude UI mee
+        local stale
+        stale=$(find transcrypt/python -name '*.py' -not -path '*/__target__/*' -newer "$mainjs" 2>/dev/null | head -5)
+        if [ -n "$stale" ]; then
+            echo "FOUT: main.js is ouder dan deze transcrypt-bronnen:"
+            echo "$stale" | sed 's/^/   /'
+            echo "Compileer eerst (transcrypt + webpack, zie README), of gebruik --skip-frontend-check."
+            exit 1
+        fi
+    fi
+    if [ "$DO_TESTS" -eq 1 ]; then
+        if [ -x pyenv/bin/python ]; then
+            echo "-- preflight: pytest"
+            local out
+            if ! out=$(cd audio_controller && ../pyenv/bin/python -m pytest -q -x 2>&1); then
+                echo "$out" | tail -15
+                echo "FOUT: tests falen; er wordt niets gedeployed (--no-tests om te forceren)."
+                exit 1
+            fi
+            echo "   $(echo "$out" | tail -1)"
+        else
+            echo "LET OP: geen lokale venv (pyenv/); tests overgeslagen. Maak hem met: bash create_venv.sh"
+        fi
     fi
     if ! git diff --quiet || ! git diff --cached --quiet; then
         echo "LET OP: working tree bevat niet-gecommitte wijzigingen; die gaan mee naar de Pi."
@@ -253,19 +324,39 @@ preflight() {
     "${SSH[@]}" 'echo "Verbonden met $(hostname)"'
 }
 
+push_frontend() {
+    # $1 = lokale main*.js, $2 = "" of "-n". Gaat als 'main.js' naar de Pi: de app hernoemt
+    # die bij het starten naar main-<tijdstempel>.js en ruimt oudere main-*.js zelf op
+    # (handlers.get_js_filename). Zo blijft er nooit een oudere/nieuwere versie naast staan,
+    # ook niet na een rollback (de app kiest anders de hoogste tijdstempel, en dat zou de
+    # teruggedraaide versie zijn).
+    local src="$1" dry="$2"
+    echo "-- frontend: $(basename "$src") -> static/js/main.js"
+    # shellcheck disable=SC2086
+    rsync -vzt $dry -e "$SSH_E" "$src" \
+        "$PI_USER@$PI_HOST:~/AudioController/audio_controller/audio_controller/static/js/main.js"
+}
+
 sync_files() {
     # README stap 3, via rsync. $1 = "" of "-n" (dry-run).
     local dry="$1"
-    local ssh_cmd="ssh -i '$KEY' -p $PI_PORT -o ConnectTimeout=10"
+    local ssh_cmd="$SSH_E"
+    # deploy_info.txt: wat er precies op de Pi staat (--status toont het)
+    local info
+    info=$(mktemp -d)/deploy_info.txt
+    printf 'branch: %s\ncommit: %s\ndatum:  %s\nvan:    %s@%s\n' \
+        "$(git branch --show-current)" "$(git rev-parse --short HEAD)" "$(date '+%Y-%m-%d %H:%M:%S')" "$USER" "$(hostname)" > "$info"
     echo "-- sync package + scripts -> ~/AudioController"
     # shellcheck disable=SC2086
     rsync -rvzt $dry \
-        --exclude="fontawesome*" --exclude="bootstrap*" \
+        --exclude="fontawesome*" --exclude="bootstrap*" --exclude="main*.js" \
         --exclude="*.pyc" --exclude="__pycache__" --exclude=".pytest_cache" --exclude="*.egg-info" \
         --exclude=".DS_Store" \
         -e "$ssh_cmd" \
-        ./audio_controller ./run_audio_controller.sh ./audio_controller.service \
+        ./audio_controller ./run_audio_controller.sh ./audio_controller.service "$info" \
         "$PI_USER@$PI_HOST:~/AudioController/"
+    rm -rf "$(dirname "$info")"
+    push_frontend "$MAINJS" "$dry"
     echo "-- sync kiosk-launcher -> ~/Desktop"
     # shellcheck disable=SC2086
     rsync -vzt $dry -e "$ssh_cmd" \
@@ -283,8 +374,12 @@ do_backup() {
     local ts dest ssh_cmd svc_user svc_home
     ts=$(date +%Y%m%d_%H%M%S)
     dest="$BACKUP_DIR/$LOC/$ts"
-    ssh_cmd="ssh -i '$KEY' -p $PI_PORT -o ConnectTimeout=10"
+    ssh_cmd="$SSH_E"
     IFS=: read -r svc_user svc_home <<< "$(service_home)"
+    if [ -z "$svc_home" ]; then
+        echo "   FOUT: kan de service-user/home niet bepalen (Pi onbereikbaar?); er wordt NIETS gepusht."
+        exit 1
+    fi
     mkdir -p "$dest/home"
     echo "-- backup: download huidige bestanden van $DOEL"
     echo "           -> $dest"
@@ -317,7 +412,7 @@ do_backup() {
     else
         echo "   FOUT: backup mislukt; er wordt NIETS gepusht."
         echo "   (Eerste keer? Accepteer de host-key handmatig, of gebruik --no-backup om te forceren.)"
-        rmdir "$dest" 2>/dev/null || true
+        rm -rf "$dest"   # eigen, zojuist aangemaakte map; een halve backup mag nooit als 'nieuwste' gelden
         exit 1
     fi
 }
@@ -340,8 +435,11 @@ install_deps() {
             python3 -m venv pyenv
         fi
         echo "   venv: $(pyenv/bin/python --version 2>&1) in $(pwd)/pyenv"
-        pyenv/bin/python -m pip install --quiet --upgrade pip
-        pyenv/bin/python -m pip install --quiet --editable ./audio_controller
+        # tijdslimiet: een hangende PyPI-verbinding mag de deploy niet blokkeren
+        timeout 300 pyenv/bin/python -m pip install --quiet --upgrade pip \
+            || { echo "   FOUT: pip-upgrade mislukt of duurde >5 min (internet op de Pi?); --no-deps om over te slaan"; exit 1; }
+        timeout 600 pyenv/bin/python -m pip install --quiet --editable ./audio_controller \
+            || { echo "   FOUT: pip install mislukt of duurde >10 min (internet op de Pi?); --no-deps om over te slaan"; exit 1; }
         echo "   geinstalleerd:"
         pyenv/bin/python -m pip list --format=columns 2>/dev/null \
             | grep -i -E "^(audio[-_]controller|tornado|python-socketio|pyserial|python-decouple|onvif-zeep|requests|gpiozero|RPi\.GPIO) " \
@@ -352,10 +450,97 @@ install_deps() {
     '
 }
 
+restart_service() {
+    echo "-- service herstarten"
+    if "${SSH[@]}" "sudo systemctl restart $SERVICE && sleep 2 && systemctl is-active $SERVICE"; then
+        check_instance
+    else
+        echo
+        echo "FOUT: $SERVICE is niet actief na de herstart. Laatste logregels:"
+        "${SSH[@]}" "sudo journalctl -u $SERVICE -n 30 --no-pager 2>/dev/null || sudo systemctl status $SERVICE --no-pager -l | tail -30" || true
+        echo
+        echo "Terugrollen naar de laatste backup: ./update_pi.sh $LOC --rollback"
+        exit 1
+    fi
+}
+
+do_rollback() {
+    # Bestanden uit een backup-map terugzetten. Standaard de nieuwste backup van deze
+    # locatie; anders --rollback=<map> of --rollback=<datum-tijd>. Kiest de bron VOOR de
+    # eigen pre-rollback backup, anders zou "nieuwste" naar de kapotte staat wijzen.
+    local src="$ROLLBACK_FROM"
+    if [ -z "$src" ]; then
+        # nieuwste map die echt een package bevat (geen lege/halve backup)
+        src=$(for d in "$BACKUP_DIR/$LOC"/*/; do [ -d "$d/audio_controller" ] && echo "$d"; done 2>/dev/null | sort | tail -1)
+    elif [ ! -d "$src" ] && [ -d "$BACKUP_DIR/$LOC/$src" ]; then
+        src="$BACKUP_DIR/$LOC/$src"
+    fi
+    src="${src%/}"
+    if [ -z "$src" ] || [ ! -d "$src/audio_controller" ]; then
+        echo "FOUT: geen bruikbare backup gevonden (verwacht $BACKUP_DIR/$LOC/<datum-tijd>/audio_controller/)."
+        ls -1d "$BACKUP_DIR/$LOC"/*/ 2>/dev/null | sed 's/^/   /' || true
+        exit 1
+    fi
+    "${SSH[@]}" 'echo "Verbonden met $(hostname)"' || { echo "FOUT: $DOEL is niet bereikbaar; rollback afgebroken."; exit 1; }
+    echo "Rollback voor $LOC vanuit: $src"
+    [ -f "$src/deploy_info.txt" ] && sed 's/^/   /' "$src/deploy_info.txt"
+    grep -h __version__ "$src/audio_controller/audio_controller/__init__.py" 2>/dev/null | sed 's/^/   /' || true
+    echo "   bestanden: $(ls -1 "$src" | tr '\n' ' ')"
+    if [ "$ROLLBACK_CONFIG" -eq 1 ]; then
+        [ -d "$src/home" ] || { echo "FOUT: --with-config, maar $src/home/ ontbreekt."; exit 1; }
+        echo "   config:    $(ls -1A "$src/home" | tr '\n' ' ')"
+    else
+        echo "   config:    blijft zoals hij nu is (--with-config om ook home/ terug te zetten)"
+    fi
+    bevestig "Deze backup terugzetten op $DOEL en de service herstarten?"
+    if [ "$DO_BACKUP" -eq 1 ]; then
+        do_backup
+    else
+        echo "-- pre-rollback backup overgeslagen (--no-backup)"
+    fi
+    local svc_user svc_home
+    if [ "$ROLLBACK_CONFIG" -eq 1 ]; then
+        IFS=: read -r svc_user svc_home <<< "$(service_home)"
+        [ -n "$svc_home" ] || { echo "FOUT: kan de service-home niet bepalen; rollback afgebroken (service niet gestopt)."; exit 1; }
+        echo "-- service stoppen (config wordt vervangen)"
+        "${SSH[@]}" "sudo systemctl stop $SERVICE"
+    fi
+    echo "-- bestanden terugzetten -> ~/AudioController"
+    local items=("$src/audio_controller")
+    [ -f "$src/run_audio_controller.sh" ] && items+=("$src/run_audio_controller.sh")
+    [ -f "$src/audio_controller.service" ] && items+=("$src/audio_controller.service")
+    [ -f "$src/deploy_info.txt" ] && items+=("$src/deploy_info.txt")
+    rsync -rvzt --exclude="*.pyc" --exclude="__pycache__" --exclude=".DS_Store" --exclude="main*.js" \
+        -e "$SSH_E" "${items[@]}" "$PI_USER@$PI_HOST:~/AudioController/"
+    local bak_js
+    bak_js=$(ls -t "$src"/audio_controller/audio_controller/static/js/main*.js 2>/dev/null | while read -r f; do [ -s "$f" ] && echo "$f" && break; done)
+    if [ -n "$bak_js" ]; then
+        push_frontend "$bak_js" ""
+    else
+        echo "LET OP: geen main*.js in de backup; de frontend op de Pi blijft de huidige."
+    fi
+    if [ -f "$src/audio_controller.html" ]; then
+        rsync -vzt -e "$SSH_E" "$src/audio_controller.html" "$PI_USER@$PI_HOST:~/Desktop/"
+    fi
+    if [ "$ROLLBACK_CONFIG" -eq 1 ]; then
+        echo "-- config terugzetten -> $svc_home/ (service-user $svc_user)"
+        rsync -dzt --rsync-path="sudo -n rsync" --include=".audio_controller_*" --exclude="*" \
+            -e "$SSH_E" "$src/home/" "$PI_USER@$PI_HOST:$svc_home/"
+    fi
+    [ "$DO_DEPS" -eq 1 ] && install_deps || echo "-- dependencies overgeslagen (--no-deps)"
+    restart_service
+    healthcheck
+    echo "Rollback klaar. De staat van vóór de rollback staat in de nieuwste backup-map."
+}
+
 case "$ACTIE" in
 
     backup)
         do_backup
+        ;;
+
+    rollback)
+        do_rollback
         ;;
 
     deps)
@@ -374,6 +559,7 @@ case "$ACTIE" in
         "${SSH[@]}" "
             echo \"host:     \$(hostname)\"
             grep -h __version__ $REMOTE_APP/__init__.py 2>/dev/null | head -1 | sed 's/^/versie:   /' || true
+            [ -f ~/AudioController/deploy_info.txt ] && sed 's/^/deploy:   /' ~/AudioController/deploy_info.txt || echo 'deploy:   (geen deploy_info.txt; van voor dit script)'
             echo \"service:  \$(systemctl is-active $SERVICE 2>/dev/null || true), sinds \$(systemctl show -p ActiveEnterTimestamp --value $SERVICE 2>/dev/null || echo '?')\"
             echo \"uptime:  \$(uptime)\"
             echo \"schijf:   \$(df -h / | tail -1 | awk '{print \$3\" gebruikt van \"\$2\" (\"\$5\")\"}')\"
@@ -393,8 +579,7 @@ case "$ACTIE" in
 
     restart)
         bevestig "Service herstarten op $DOEL?"
-        "${SSH[@]}" "sudo systemctl restart $SERVICE && sleep 2 && systemctl is-active $SERVICE"
-        check_instance
+        restart_service
         healthcheck
         ;;
 
@@ -413,8 +598,7 @@ case "$ACTIE" in
         echo "Let op: audio_controller.service is meegekopieerd maar niet geactiveerd."
         echo "        Gebruik 'volledige deploy' (--full) als de systemd-unit is gewijzigd."
         if [ "$RESTART" -eq 1 ]; then
-            "${SSH[@]}" "sudo systemctl restart $SERVICE && sleep 2 && systemctl is-active $SERVICE"
-            check_instance
+            restart_service
         else
             echo "Service niet herstart (--no-restart); wijzigingen zijn pas actief na een herstart."
         fi
@@ -430,18 +614,15 @@ case "$ACTIE" in
         [ "$DO_BACKUP" -eq 1 ] && do_backup || echo "-- backup overgeslagen (--no-backup)"
         sync_files ""
         [ "$DO_DEPS" -eq 1 ] && install_deps || echo "-- dependencies overgeslagen (--no-deps)"
-        echo "-- systemd-unit (her)installeren + herstarten (stap 4)"
+        echo "-- systemd-unit (her)installeren (stap 4)"
         "${SSH[@]}" "
             set -e
             sudo cp ~/AudioController/$SERVICE /etc/systemd/system/$SERVICE
             sudo chmod 777 ~/AudioController/run_audio_controller.sh
             sudo systemctl daemon-reload
             sudo systemctl enable $SERVICE
-            sudo systemctl restart $SERVICE
-            sleep 2
-            systemctl is-active $SERVICE
         "
-        check_instance
+        restart_service
         healthcheck
         ;;
 esac
