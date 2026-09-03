@@ -35,3 +35,13 @@ def test_empty_screens_returns_empty_string():
     pb.screens = []
     pb.active = 0
     assert pb.psalmbord_as_html() == ""
+
+
+def test_board_renders_with_dataclass_screens():
+    # settings.restore() builds screens as PsalmbordScreen dataclasses (not
+    # dicts), so the board must render those too instead of crashing with 500
+    pb = psalmbord.Psalmbord()
+    pb.screens = [psalmbord.PsalmbordScreen(index=0, text="Ps 45 : 1", size=8)]
+    pb.active = 0
+    html = pb.psalmbord_as_html()
+    assert "Ps" in html

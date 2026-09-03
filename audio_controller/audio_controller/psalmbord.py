@@ -51,7 +51,11 @@ class Psalmbord:
         # guard against an empty screen list or an out-of-range active index
         if not self.screens or not (0 <= self.active < len(self.screens)):
             return ""
-        regels = self.screens[self.active]["text"].splitlines()
+        # screens hold dicts when set via the SPA/json but PsalmbordScreen
+        # dataclasses when built by settings.restore(); accept both
+        screen = self.screens[self.active]
+        text = screen["text"] if isinstance(screen, dict) else screen.text
+        regels = text.splitlines()
 
         content = ""
         for r in regels:

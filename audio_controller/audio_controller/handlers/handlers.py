@@ -130,10 +130,16 @@ class BaseHandler(tornado.web.RequestHandler):
         return not self.is_localhost()
 
     def is_localhost(self):
-        """Return True only for the trusted, loopback-only listener.
-        Trust is decided by the app this handler runs in (set per listening
-        port in make_app), NOT by the client-controlled Host header (S4)."""
-        return bool(self.application.settings.get("local_no_login", False))
+        """Return True only for a loopback client on the trusted internal listener.
+        Trust is decided by the app this handler runs in (set per listening port
+        in make_app) AND the socket peer address — NOT by the client-controlled
+        Host header (S4). The remote_ip comes straight from the socket (xheaders
+        is off), so it cannot be spoofed via X-Real-IP/X-Forwarded-For. The
+        internal port is LAN-reachable for the psalmbord, so a LAN client here
+        gets the same login wall as the external port."""
+        if not self.application.settings.get("internal", False):
+            return False
+        return self.request.remote_ip in ("127.0.0.1", "::1", "::ffff:127.0.0.1")
 
     def write_login_exception(self):
         self.write(dumps({"LoginException": "Please login first"}))
@@ -781,26 +787,19 @@ class Camera(BaseHandler):
             self.write(dumps(result))
             return
 
-class Psalmbord(tornado.web.RequestHandler):
-    def prepare(self):
-        # issue the _xsrf cookie when the board page is loaded
-        self.xsrf_token
-
+class Psalmbord(BaseHandler):
     def check_xsrf_cookie(self):
         # The /psalmbord POST is read-only (returns board html/state only), so it
         # is exempt from XSRF. This lets the kiosk board keep polling without a
         # token (S5). State-changing endpoints (General/Login/Camera) stay protected.
         pass
 
-    def body_to_json(self):
-        body = self.request.body
-        if not body:
-            body = b"{}"
-        try:
-            return json.loads(body)
-        except (json.JSONDecodeError, ValueError):
-            return {}
-    
+    def psalmbord_login_required(self):
+        """The board is free on the internal listener (LAN kiosk screens reach
+        it without login); the external listener requires login. The remote_ip
+        plays no role here - trust for the board follows the port alone."""
+        return not self.application.settings.get("internal", False)
+
     def get_css(self):
         # Coerce to int: fontsize/fontweight are int-cast on the setPsalmbord
         # path, but a crafted settings *import* can store an arbitrary string.
@@ -817,6 +816,9 @@ class Psalmbord(tornado.web.RequestHandler):
         return f"html {{ --regels: {fs}; }} \n .font_weight {{ font-weight: {fw}; }}"
 
     def get(self):
+        if self.psalmbord_login_required() and not self.logged_in():
+            self.redirect("/")
+            return
         if settings.settings.enable_psalmbord:
             self.render("psalmbord.html", css=self.get_css())
         else:
@@ -824,6 +826,10 @@ class Psalmbord(tornado.web.RequestHandler):
             self.write(html)
 
     def post(self):
+        if self.psalmbord_login_required() and not self.logged_in():
+            self.set_status(403)
+            self.write_login_exception()
+            return
         if settings.settings.enable_psalmbord:
             kwargs = self.body_to_json()
             if kwargs.get("html"):

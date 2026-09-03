@@ -31,6 +31,12 @@ main_logger = logging.getLogger("main")
 
 _VOLUME_RE = re.compile(r"^\d+%?$")
 
+# (port, bind address, internal) per listener. 5000 is the internal port: kiosk
+# screens on the LAN reach /psalmbord without login and loopback clients keep
+# full no-login trust (see BaseHandler.is_localhost). 8080 is the external port:
+# login required for everything. The router must only forward 8080.
+PORT_ADDRESS = [(5000, "0.0.0.0", True), (8080, "0.0.0.0", False)]
+
 
 def valid_volume(raw) -> str:
     """Return a validated ALSA volume like '80%'. Defaults to '100%' for anything unsafe (S6)."""
@@ -42,7 +48,11 @@ def valid_volume(raw) -> str:
     return raw if raw.endswith("%") else raw + "%"
 
 
-def make_app(local_no_login: bool = False):
+def make_app(internal: bool = False):
+    """Build the app for one listener. internal=True marks the trusted internal
+    port (5000): loopback clients get full no-login trust and the psalmbord is
+    served without login to the whole LAN. internal=False is the external port
+    (8080): login required for everything, including the psalmbord."""
     template_dir = here / "views"
     static_dir = here / "static"
     settings = dict(
@@ -50,7 +60,7 @@ def make_app(local_no_login: bool = False):
         autoreload=False,
         cookie_secret=user.get_cookie_secret(),
         template_path=str(template_dir),
-        local_no_login=local_no_login,
+        internal=internal,
         xsrf_cookies=True,
     )
 
@@ -141,15 +151,12 @@ def main():
     args = sys.argv[1:]
     try:
         init_system(args)
-        # listen on 2 ports: 5000 loopback-only (trusted, no login) and
-        # 8080 external (login required). Trust follows the port, not the Host header (S4).
-        port_address = [(5000, "127.0.0.1", True), (8080, "0.0.0.0", False)]
         # Cap request bodies so an unauthenticated client cannot exhaust memory on
         # the Pi via a huge POST (e.g. to /psalmbord). Settings uploads are a few
         # KB; 5 MB is generous. (DoS hardening)
         max_body_size = 5 * 1024 * 1024
-        for port, address, local_no_login in port_address:
-            app = make_app(local_no_login)
+        for port, address, internal in PORT_ADDRESS:
+            app = make_app(internal)
             app.listen(port=port, address=address, max_body_size=max_body_size)
             msg = f"Listening on {address}:{port}"
             print(msg)

@@ -23,7 +23,7 @@ def _xsrf_from(headers):
 
 
 class _Base(AsyncHTTPTestCase):
-    LOCAL_NO_LOGIN = False
+    INTERNAL = False
 
     def setUp(self):
         super().setUp()
@@ -31,7 +31,7 @@ class _Base(AsyncHTTPTestCase):
         settings.restore()
 
     def get_app(self):
-        return appmod.make_app(local_no_login=self.LOCAL_NO_LOGIN)
+        return appmod.make_app(internal=self.INTERNAL)
 
     def _prime_xsrf(self):
         """GET / to obtain an _xsrf cookie; return (token, cookie_header)."""
@@ -53,7 +53,7 @@ class _Base(AsyncHTTPTestCase):
 
 
 class TestExternalAuth(_Base):
-    LOCAL_NO_LOGIN = False
+    INTERNAL = False
 
     def test_xsrf_required_on_post(self):
         # S5: a state-changing POST without an xsrf token is rejected (403)
@@ -67,12 +67,6 @@ class TestExternalAuth(_Base):
         r = self._post("/audio/setSources", {"sources": []}, token=token, cookie=cookie)
         self.assertEqual(r.code, 200)
         self.assertEqual(json.loads(r.body)["success"], False)
-
-    def test_psalmbord_post_is_xsrf_exempt(self):
-        # S5: the read-only board endpoint stays reachable without a token
-        r = self.fetch("/psalmbord", method="POST", body=json.dumps({"html": True}),
-                       headers={"Content-Type": "application/json"})
-        self.assertEqual(r.code, 200)
 
     def test_default_admin_login_forces_change_and_is_gated(self):
         token, cookie = self._prime_xsrf()
@@ -101,7 +95,7 @@ class TestExternalAuth(_Base):
 
 
 class TestLocalNoLogin(_Base):
-    LOCAL_NO_LOGIN = True
+    INTERNAL = True
 
     def test_audio_allowed_without_login_on_local_port(self):
         # S4: trust follows the (loopback) listener, not the Host header
@@ -110,3 +104,11 @@ class TestLocalNoLogin(_Base):
         self.assertEqual(r.code, 200)
         # getSources returns a list, not a login failure
         self.assertIsInstance(json.loads(r.body), list)
+
+    def test_psalmbord_post_is_xsrf_exempt(self):
+        # S5: the read-only board endpoint stays reachable without a token, so
+        # the kiosk board keeps polling (on the internal listener; the external
+        # listener additionally requires login, see test_psalmbord_auth.py)
+        r = self.fetch("/psalmbord", method="POST", body=json.dumps({"html": True}),
+                       headers={"Content-Type": "application/json"})
+        self.assertEqual(r.code, 200)

@@ -32,7 +32,7 @@ class AuthzExternal(AsyncHTTPTestCase):
         ])
 
     def get_app(self):
-        return appmod.make_app(local_no_login=False)
+        return appmod.make_app(internal=False)
 
     def _prime(self):
         r = self.fetch("/", method="GET")

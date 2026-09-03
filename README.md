@@ -212,6 +212,20 @@ speaker-test -c2
 ```
 
 
+## 6. Ports and access
+
+The application listens on two ports:
+
+- **5000 (internal)**: for the LAN. `/psalmbord` is served without login, so kiosk
+  screens can point at `http://<pi-ip>:5000/psalmbord`. Everything else requires
+  login, except for clients on the Pi itself (loopback), which are fully trusted -
+  this keeps the local kiosk browser on `http://localhost:5000/` working without login.
+- **8080 (external)**: internet-facing. Login required for everything, including
+  `/psalmbord` (log in at `/` first, then open `/psalmbord`).
+
+Make sure the router only forwards port 8080. If port 5000 is forwarded, the
+psalmbord is publicly reachable again.
+
 ## Extras
 
 Disable updates
@@ -293,3 +307,6 @@ This release hardens the application (see the PR description for details):
 - Passwords are stored with **salted PBKDF2**; legacy unsalted hashes still verify and
   are upgraded on next login. The default admin must set a new password on first login.
 - The audio-routing endpoints now require login on the external port.
+- The psalmbord requires **login on the external port** (8080); kiosk screens on the
+  LAN use the internal port (5000), where full no-login trust is limited to loopback
+  clients. See "Ports and access".
