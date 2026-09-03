@@ -401,44 +401,6 @@ class Camera:
             }
         })
 
-    def is_http_available(self, timeout=2) -> bool:
-        try:
-            url = f"http://{self.url_intern}:{self.port_http}/"
-
-            response = requests.get(
-                url,
-                auth=(self.username, self.password),
-                timeout=timeout,
-            )
-
-            return response.status_code < 500
-
-        except requests.RequestException:
-            return False
-
-    #
-    # COMMON
-    #
-
-    def port_open(self, port: int, timeout=1) -> bool:
-        try:
-            with socket.create_connection(
-                (self.url_intern, port),
-                timeout=timeout,
-            ):
-                return True
-
-        except OSError:
-            return False
-
-    def test_connection(self):
-
-        return {
-            "http_port": self.port_open(self.port_http),
-            "onvif_port": self.port_open(self.port_onvif),
-            "http": self.is_http_available(),
-            "onvif": self.is_onvif_available(),
-        }
 
 #
 # DEFAULT CAMERA'S
