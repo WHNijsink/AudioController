@@ -26,6 +26,11 @@
 # naar $BACKUP_DIR/<locatie>/<datum-tijd>/ voordat er iets wordt overschreven (te
 # omzeilen met --no-backup). Elke backup krijgt een eigen datum-tijd-submap, dus ze
 # stapelen en je houdt er meerdere. --backup doet alleen dat downloaden, zonder te pushen.
+# Naast ~/AudioController/ gaat ook de config uit de home-map mee, in de submap home/:
+# ~/.audio_controller_settings.json (settings/sources/destinations/psalmbord/cameras/users),
+# ~/.audio_controller_settings.pickle (legacy, pre-1.5.0), ~/.audio_controller_users.txt
+# en ~/.audio_controller_cookie.txt. Een deploy raakt die niet aan, maar zo kun je ook
+# de instellingen van dat moment terugzetten.
 #
 # Wat wordt gesynct (README stap 3):
 #   ./audio_controller          -> ~/AudioController   (de package, incl. gecompileerde main.js)
@@ -213,20 +218,29 @@ sync_files() {
 do_backup() {
     # Download de HUIDIGE Pi-bestanden naar $BACKUP_DIR/<locatie>/<timestamp>/ zodat
     # je kunt terugrollen. Zelfde exclude-set als de deploy plus de venv: alleen wat
-    # een deploy kan overschrijven wordt bewaard. Mislukt de backup, dan stopt alles
+    # een deploy kan overschrijven wordt bewaard. Daarnaast de config-bestanden uit
+    # de home-map (~/.audio_controller_*) naar <timestamp>/home/, zodat ook de
+    # instellingen van dat moment bewaard blijven. Mislukt de backup, dan stopt alles
     # (tenzij --no-backup): eerst veiligstellen, dan pas pushen.
-    local ts dest
+    local ts dest ssh_cmd
     ts=$(date +%Y%m%d_%H%M%S)
     dest="$BACKUP_DIR/$LOC/$ts"
-    mkdir -p "$dest"
+    ssh_cmd="ssh -i '$KEY' -p $PI_PORT -o ConnectTimeout=10"
+    mkdir -p "$dest/home"
     echo "-- backup: download huidige bestanden van $DOEL"
     echo "           -> $dest"
+    # Tweede rsync: config uit de home-map via include/exclude-filter i.p.v. losse
+    # bestandsnamen, zodat een ontbrekend bestand (bijv. de legacy pickle) geen fout geeft.
     # shellcheck disable=SC2086
     if rsync -rzt \
         --exclude="pyenv" --exclude="fontawesome*" --exclude="bootstrap*" \
         --exclude="*.pyc" --exclude="__pycache__" --exclude=".pytest_cache" \
-        -e "ssh -i '$KEY' -p $PI_PORT -o ConnectTimeout=10" \
-        "$PI_USER@$PI_HOST:~/AudioController/" "$dest/"; then
+        -e "$ssh_cmd" \
+        "$PI_USER@$PI_HOST:~/AudioController/" "$dest/" \
+    && rsync -dzt \
+        --include=".audio_controller_*" --exclude="*" \
+        -e "$ssh_cmd" \
+        "$PI_USER@$PI_HOST:~/" "$dest/home/"; then
         local aantal
         aantal=$(ls -1d "$BACKUP_DIR/$LOC"/*/ 2>/dev/null | wc -l | tr -d ' ')
         echo "   backup klaar ($(du -sh "$dest" 2>/dev/null | cut -f1)); $aantal backup(s) bewaard voor $LOC"
