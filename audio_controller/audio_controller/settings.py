@@ -186,6 +186,11 @@ def upgrade(store: dict):
     if store['settings']['version'] == 9:
         store['settings']['version'] = 10
         store['settings']['enable_camera'] = False
+        # het oude bord-model (title + regels) is vervangen door screens; die
+        # sleutels moeten weg, anders faalt Psalmbord(**store['psalmbord']) en
+        # valt load() terug op defaults (alle instellingen kwijt)
+        store['psalmbord'].pop('title', None)
+        store['psalmbord'].pop('regels', None)
         store['psalmbord']['active'] = 1
         store['psalmbord']['screens'] = [
             psalmbord.PsalmbordScreen(index=i, text=text, size=8)
