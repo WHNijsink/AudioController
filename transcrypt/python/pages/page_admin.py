@@ -54,8 +54,8 @@ class Settings(AccordionItem):
         input_enable_camera = E("input").attr("class", "form-control").attr("type", "checkbox")
         input_enable_logging = E("input").attr("class", "form-control").attr("type", "checkbox")
 
-        width_1 = "col-sm-5 col-md-3"
-        width_2 = "col-sm-3 col-md-2"
+        width_1 = "col-sm-5 col-md-4 col-lg-3"
+        width_2 = "col-sm-5 col-md-4 col-lg-2"
         self.body.append(
             E("div")
             .attr("class", "form-group row")
