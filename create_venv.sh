@@ -20,6 +20,7 @@ python -m pip install transcrypt
 python -m pip install watchdog
 python -m pip install python-decouple
 python -m pip install onvif-zeep
+python -m pip install requests
 python -m pip install pytest
 cd audio_controller
 python -m pip install --editable .

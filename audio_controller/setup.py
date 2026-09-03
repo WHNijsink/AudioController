@@ -42,6 +42,18 @@ setuptools.setup(
     long_description_content_type="text/markdown",
     url="",
     packages=setuptools.find_packages(),
+    # Runtime dependencies. Build/dev-only tools (transcrypt, watchdog, pytest,
+    # pylint, black) are intentionally not listed here; create_venv.sh installs
+    # those. 'requests' is used directly (camera/SSRF checks) and no longer relies
+    # on being pulled in transitively by onvif-zeep.
+    install_requires=[
+        "tornado",
+        "python-socketio",
+        "pyserial",
+        "python-decouple",
+        "onvif-zeep",
+        "requests",
+    ],
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",
