@@ -2,8 +2,8 @@
 # update_pi.sh - AudioController op een van de Pi's bijwerken/beheren vanaf deze checkout.
 # Update volgt README stap 2.3 (dependencies in de venv, nu via setup.py install_requires),
 # stap 3 (rsync i.p.v. scp) en stap 4 (service herstarten/herinstalleren).
-# LET OP: bevat interne deploy-details (hostnames/IP/poort/users) van de gergem-locaties.
-# Alleen op de eigen fork bewaren; niet naar de publieke upstream (ArjenGuis) pushen.
+# LET OP: bevat deploy-details (hostnames/IP/poort/users) van de gergem-locaties;
+# bewust in de repo zodat elke checkout dezelfde locaties kent.
 #
 # Gebruik:
 #   ./update_pi.sh                     menu: kies locatie en actie
