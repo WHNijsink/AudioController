@@ -1,3 +1,4 @@
+from __future__ import annotations  # PEP 604 'X | None' hints on Python 3.9 (documented 3.7+)
 from typing import Any
 from dataclasses import dataclass, field, asdict, is_dataclass
 from onvif import ONVIFCamera

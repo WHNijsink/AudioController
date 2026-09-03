@@ -83,6 +83,14 @@
                     // kolom 1 is breder, dus kolom 3 smaller
                     $(this).find(".col3").css("width", regel - col1 - col2 - 1)
                 }
+                
+                if( $.isNumeric( $(this).find(".col1").text() ) ){
+                    // als col1 uit alleen een getal bestaat, dan rechts uitlijnen. 
+                    // Praktijkvoorbeeld:
+                    // Genesis
+                    //    18 : 9 - 15
+                    $(this).find(".col1 span").attr('style', 'float:right !important');
+                }
             }
         })
         firstAlignment = false;

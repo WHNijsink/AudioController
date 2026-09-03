@@ -75,3 +75,7 @@ class ElementWrapper():
     def inner_html(self, txt):
         self.element.innerHTML = txt
         return self
+
+    def text(self, txt):
+        self.element.textContent = txt
+        return self

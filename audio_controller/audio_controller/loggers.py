@@ -1,5 +1,6 @@
 from pathlib import Path
 import logging
+import logging.handlers
 import os
 import tarfile
 import tempfile
@@ -45,7 +46,9 @@ def setup_logging():
     for name in loggers:
         logger = logging.getLogger(name)
         logger.setLevel(logging.DEBUG)
-        assert not logger.hasHandlers(), "Logger is supposed to have only one handler"
+        # Remove any existing handlers (may happen in tests)
+        for handler in logger.handlers[:]:
+            logger.removeHandler(handler)
         filename = str(log_dir / f"{name}.log")
         handler = logging.handlers.RotatingFileHandler(filename, maxBytes=1000000, backupCount=5)
         formatter = logging.Formatter(fmt=r'%(asctime)s - %(levelname)s - %(message)s', datefmt=r'%Y-%m-%d %H:%M:%S')

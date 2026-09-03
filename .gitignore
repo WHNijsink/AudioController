@@ -17,3 +17,4 @@ __pycache__
 .env
 .git.tar
 rsync-result.txt
+.pytest_cache

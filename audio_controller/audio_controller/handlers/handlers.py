@@ -2,6 +2,7 @@
 import os
 import sys
 import signal
+import subprocess
 import logging
 import math
 import datetime as dt
@@ -18,33 +19,93 @@ from copy import deepcopy
 import socketio
 import tornado
 import tornado.web
+import tornado.ioloop
 
 # import tornado.websocket
 
 # internals
-from audio_controller import settings, controller, user, loggers, gpio, __version__
+from audio_controller import settings, controller, user, loggers, gpio, psalmbord, __version__
 
 here = Path(os.path.dirname(__file__)).resolve()
 main_logger = logging.getLogger("main")
+
+
+async def _run_blocking(func):
+    """Run a blocking device-I/O callable off the IOLoop, so one slow or
+    unreachable camera cannot stall the whole server -- all listening ports share
+    a single event loop. (C: event-loop starvation DoS)
+
+    Any exception is logged with its traceback to the 'main' log file before it is
+    re-raised, so a failing camera/ONVIF call is debuggable even though the caller
+    turns it into a {"success": false} response. No detail is returned to the
+    client (that would leak internals); the full traceback goes to the log only."""
+    try:
+        return await tornado.ioloop.IOLoop.current().run_in_executor(None, func)
+    except Exception:
+        main_logger.exception("camera device call failed")
+        raise
+
+
+# --- simple in-memory login throttling (E: brute-force hardening) ---
+# PBKDF2 already slows guessing; this adds a temporary lockout after repeated
+# failures. State is per-process (one process serves all ports); a successful
+# login clears it.
+_LOGIN_MAX_FAILURES = 10
+_LOGIN_LOCKOUT_SECONDS = 60
+_login_failures = {}  # username -> [failure_count, locked_until_ts]
+
+
+def _login_locked(username):
+    rec = _login_failures.get(username)
+    return bool(rec) and rec[1] > time.time()
+
+
+def _login_record_failure(username):
+    rec = _login_failures.get(username, [0, 0.0])
+    rec[0] += 1
+    if rec[0] >= _LOGIN_MAX_FAILURES:
+        rec[1] = time.time() + _LOGIN_LOCKOUT_SECONDS
+        rec[0] = 0
+    _login_failures[username] = rec
+
+
+def _login_reset(username):
+    _login_failures.pop(username, None)
 
 
 class BaseHandler(tornado.web.RequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
+    def prepare(self):
+        # Ensure the _xsrf cookie is issued to the client. Tornado only sets it
+        # when xsrf_token is accessed; without this the SPA/mobile app has no
+        # token to send and every state-changing POST would 403 (S5).
+        self.xsrf_token
+
     def body_to_json(self):
         body = self.request.body
         if not body:
             body = b"{}"
-        return json.loads(body)
+        try:
+            return json.loads(body)
+        except (json.JSONDecodeError, ValueError):
+            # malformed request body -> treat as empty instead of crashing 500 (C5)
+            return {}
 
     def set_default_headers(self):
-        self.set_header("Access-Control-Allow-Origin", "*")
+        # App is served same-origin; do not advertise a wildcard CORS policy (S5).
         self.set_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS, HEAD, PUT")
         self.set_header(
             "Access-Control-Allow-Headers",
-            "Origin, X-Requested-With, Content-Type: application/json, Accept, Authorization",
+            "Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Xsrftoken",
         )
+        # defense-in-depth headers (F): stop MIME sniffing and cross-origin framing
+        # (clickjacking). A full CSP is intentionally not set here because the
+        # camera page must load media from the camera device's own origin.
+        self.set_header("X-Content-Type-Options", "nosniff")
+        self.set_header("X-Frame-Options", "SAMEORIGIN")
+        self.set_header("Referrer-Policy", "same-origin")
 
     def get_current_user(self):
         """Overrides method, gets called ones when accessing 'self.current_user'"""
@@ -54,7 +115,11 @@ class BaseHandler(tornado.web.RequestHandler):
         return r
 
     def set_cookie_username(self, username: str = ""):
-        self.set_secure_cookie("audio_controller_user", username.encode("utf-8"))
+        # httponly: the auth cookie is used server-side only, so keeping it out of
+        # document.cookie limits session theft via any XSS; samesite=Lax is extra
+        # CSRF hardening. (No secure=True: the app is served over plain HTTP.)
+        self.set_secure_cookie("audio_controller_user", username.encode("utf-8"),
+                               httponly=True, samesite="Lax")
 
     def logged_in(self):
         """Return True if user is logged in, False otherwise."""
@@ -65,11 +130,40 @@ class BaseHandler(tornado.web.RequestHandler):
         return not self.is_localhost()
 
     def is_localhost(self):
-        """Return True if request comes from localhost (when port is 5000 this is True). False otherwise"""
-        return self.request.host.endswith(":5000")
+        """Return True only for a loopback client on the trusted internal listener.
+        Trust is decided by the app this handler runs in (set per listening port
+        in make_app) AND the socket peer address — NOT by the client-controlled
+        Host header (S4). The remote_ip comes straight from the socket (xheaders
+        is off), so it cannot be spoofed via X-Real-IP/X-Forwarded-For. The
+        internal port is LAN-reachable for the psalmbord, so a LAN client here
+        gets the same login wall as the external port."""
+        if not self.application.settings.get("internal", False):
+            return False
+        return self.request.remote_ip in ("127.0.0.1", "::1", "::ffff:127.0.0.1")
 
     def write_login_exception(self):
         self.write(dumps({"LoginException": "Please login first"}))
+
+    def must_change_password(self):
+        """True if the logged-in user still has to set a new password before doing
+        anything else (forced password change on first login)."""
+        if not self.current_user:
+            return False
+        for usr in settings.users:
+            if usr.username == self.current_user:
+                return bool(usr.must_change_password)
+        return False
+
+    def current_user_is_admin(self):
+        """True if the logged-in user has the admin role (used to gate system/config
+        actions). On the trusted local port there is no user; callers guard with
+        login_required() so that path stays open."""
+        if not self.current_user:
+            return False
+        for usr in settings.users:
+            if usr.username == self.current_user:
+                return bool(usr.admin)
+        return False
 
 
 def get_action(path: str):
@@ -122,45 +216,89 @@ class Login(BaseHandler):
         return False
     
     def check_app(self, usr):
-        referer = self.request.headers.get('Referer').rsplit("/", 1)[-1]
+        referer = (self.request.headers.get('Referer') or '').rsplit("/", 1)[-1]  # guard missing Referer (avoid 500)
 
         return (usr.admin or (usr.camera and referer == "camera"))
     
     def get_user(self, username, password = None):
         for usr in settings.users:
-            if username == usr.username and (password is None or user.encryptPassword(password) == usr.password):
+            if username != usr.username:
+                continue
+            if password is None or user.verify_password(password, usr.password):
+                # transparently upgrade a legacy unsalted hash to a salted one on
+                # a successful password login (one-time, per user).
+                if password is not None and user.is_legacy_hash(usr.password):
+                    usr.password = user.hash_password(password)
+                    settings.save()
                 return usr
         return False
 
     async def post(self):
         action = get_action(self.request.path)
 
+        # User administration must not be reachable without authentication (S8).
+        # login / logout / login_required stay open; the rest needs login, and
+        # listing or modifying users needs admin.
+        if action in ("setUsers", "getUsers", "setUser"):
+            if self.login_required() and not self.logged_in():
+                self.write(dumps({"success": False, "LoginException": "Please login first"}))
+                return
+            if action in ("setUsers", "getUsers"):
+                me = self.get_user(self.current_user) if self.current_user else False
+                if self.login_required() and (me is False or not me.admin):
+                    self.write(dumps({"success": False, "error": "Geen rechten"}))
+                    return
+                if self.login_required() and self.must_change_password():
+                    self.write(dumps({"success": False, "must_change_password": True}))
+                    return
+
         if action == "login_required":
             self.write(dumps({"login_required": self.login_required()}))
             return
 
         def write_users():
-            self.write(dumps([asdict(obj) for obj in settings.users]))
+            # Never expose password hashes to the client (D). The admin grid does
+            # not prefill the password field; a blank password on the way back
+            # means "keep existing" (see settings.update_users).
+            out = []
+            for obj in settings.users:
+                d = asdict(obj)
+                d["password"] = ""
+                out.append(d)
+            self.write(dumps(out))
 
         if action == "login":
             # check if already logged in (reading cookie)
             if self.current_user:  # not None and not empty string
                 usr = self.get_user(self.current_user)
                 if usr is not False and self.check_app(usr):
-                    return self.write(dumps({"success": True,"username":self.current_user}))
+                    return self.write(dumps({"success": True, "username": self.current_user,
+                                             "must_change_password": bool(usr.must_change_password)}))
 
             # else: try login if arguments are provided
             args = self.body_to_json()
             # if 'username' in args and 'password' in args:
             username = str(args.get("username"))
             password = str(args.get("password"))
+            # brute-force throttling on the external port (E)
+            if self.login_required() and _login_locked(username):
+                msg = f"Login temporarily locked for user {username}"
+                print(msg)
+                main_logger.info(msg)
+                self.write(dumps({"success": False,
+                                  "error": "Te veel mislukte pogingen, probeer het later opnieuw"}))
+                return
             if self.check_user(username, password):
+                _login_reset(username)
                 msg = f"Login user {username}"
                 print(msg)
                 main_logger.info(msg)
                 self.set_cookie_username(username)  # assumes unique usernames
-                self.write(dumps({"success": True}))
+                usr = self.get_user(username)
+                self.write(dumps({"success": True,
+                                  "must_change_password": bool(usr and usr.must_change_password)}))
             else:
+                _login_record_failure(username)
                 msg = f"Login failed for user {username}"
                 print(msg)
                 main_logger.info(msg)
@@ -177,30 +315,53 @@ class Login(BaseHandler):
 
         elif action == 'setUsers':
             args = self.body_to_json()
-            users = args["users"]
-            settings.update_users(users)
+            users = args.get("users", [])
+            try:
+                settings.update_users(users)
+            except Exception:
+                # e.g. duplicate usernames are rejected by update_users
+                self.write(dumps({"success": False, "error": "Ongeldige gebruikerslijst"}))
+                return
             write_users()
             await notify_change()
 
         elif action == 'setUser':
             args = self.body_to_json()
-            users = deepcopy(settings.users)
+            new_username = str(args.get("username", ""))
+            new_password = str(args.get("password", ""))
+            if not new_username or not new_password:
+                self.write(dumps({"success": False}))
+                return
 
+            # Reject weak/default passwords so the forced first-login change (and
+            # any self-service change) cannot re-set the shipped default. (E)
+            if new_password.lower() in ("admin", "password") or new_password == new_username:
+                self.write(dumps({"success": False,
+                                  "error": "Kies een sterker wachtwoord"}))
+                return
+
+            # A user may only rename to a name not already owned by a DIFFERENT
+            # account. Authorization resolves a user by username (first match), so
+            # a duplicate would bind this session to another (possibly admin) row
+            # -> privilege escalation. Fail closed. (security)
+            for usr in settings.users:
+                if usr.username == new_username and usr.username != self.current_user:
+                    self.write(dumps({"success": False, "error": "Gebruikersnaam bestaat al"}))
+                    return
+
+            users = deepcopy(settings.users)
             for usr in users:
                 if usr.username == self.current_user:
-                    usr.username = args['username']
-                    usr.password = args['password']
+                    usr.username = new_username
+                    usr.password = new_password
 
             try:
                 settings.update_users([vars(u) for u in users])
-                result = {
-                    "success": True,
-                }
-            except Exception as err:
-                result = {
-                    "success": False,
-                    #"error": str(err)
-                }
+                # keep the session valid after a self-rename (cookie holds the name)
+                self.set_cookie_username(new_username)
+                result = {"success": True}
+            except Exception:
+                result = {"success": False}
             self.write(dumps(result))
             await notify_change()
 
@@ -215,6 +376,16 @@ class General(BaseHandler):
 
         if self.login_required() and not self.logged_in():
             self.write(dumps({"success": False}))
+            return
+
+        # system/config actions are admin-only; a camera-only session must not
+        # reboot, change routing or upload settings (privilege escalation) (S9)
+        if self.login_required() and not self.current_user_is_admin():
+            self.write(dumps({"success": False, "error": "Geen rechten"}))
+            return
+
+        if self.login_required() and self.must_change_password():
+            self.write(dumps({"success": False, "must_change_password": True}))
             return
 
         def write_settings():
@@ -243,15 +414,15 @@ class General(BaseHandler):
             return
 
         elif action == "ifconfig":
-            self.write(os.popen("ifconfig").read())
+            self.write(subprocess.run(["ifconfig"], capture_output=True, text=True).stdout)
             return
 
         elif action == "reboot":
-            os.system("shutdown -r now")
+            subprocess.run(["shutdown", "-r", "now"])
             return
 
         elif action == "shutdown":
-            os.system("shutdown now")
+            subprocess.run(["shutdown", "now"])
             return
 
         elif action == "downloadSettings":
@@ -287,6 +458,21 @@ class Audio(BaseHandler):
     async def post(self):
         action = get_action(self.request.path)
 
+        # Audio routing endpoints (setSources/setDestinations) are state-changing;
+        # require login on the external port, same as General (S7 - was unguarded).
+        if self.login_required() and not self.logged_in():
+            self.write(dumps({"success": False}))
+            return
+
+        # routing configuration is admin-only (S9)
+        if self.login_required() and not self.current_user_is_admin():
+            self.write(dumps({"success": False, "error": "Geen rechten"}))
+            return
+
+        if self.login_required() and self.must_change_password():
+            self.write(dumps({"success": False, "must_change_password": True}))
+            return
+
         def write_sources():
             self.write(dumps([asdict(obj) for obj in settings.sources]))
 
@@ -305,7 +491,7 @@ class Audio(BaseHandler):
 
         elif action == "setSources":
             args = self.body_to_json()
-            sources = args["sources"]
+            sources = args.get("sources", [])
             settings.update_sources(sources)
             controller.set_routes()
             write_sources()
@@ -318,7 +504,7 @@ class Audio(BaseHandler):
 
         elif action == "setDestinations":
             args = self.body_to_json()
-            destinations = args["destinations"]
+            destinations = args.get("destinations", [])
             settings.update_destinations(destinations)
             controller.set_routes()
             write_destinations()
@@ -331,8 +517,8 @@ class Audio(BaseHandler):
             return
 
         elif action == "soundcards":
-            aplay = os.popen("aplay -l").read()
-            arecord = os.popen("arecord -l").read()
+            aplay = subprocess.run(["aplay", "-l"], capture_output=True, text=True).stdout
+            arecord = subprocess.run(["arecord", "-l"], capture_output=True, text=True).stdout
             self.write(f"{aplay}\n{arecord}")
             return
 
@@ -342,6 +528,10 @@ class Audio(BaseHandler):
 
 
 class CameraApp(tornado.web.RequestHandler):
+    def prepare(self):
+        # issue the _xsrf cookie so camera.js can send it on its POSTs (S5)
+        self.xsrf_token
+
     def get(self):
         if settings.settings.enable_psalmbord:
             font = settings.pb.fontfamily
@@ -365,31 +555,60 @@ class Camera(BaseHandler):
             }))
             return
 
+        if self.login_required() and self.must_change_password():
+            self.write(dumps({"success": False, "must_change_password": True,
+                              "error": "Wachtwoord wijzigen vereist"}))
+            return
+
+        def cam_dict(obj):
+            d = obj.to_dict()
+            # ONVIF credentials are only for admins (the settings grid); a
+            # camera-only session lists/controls cameras but must not read the
+            # stored passwords (S9)
+            if self.login_required() and not self.current_user_is_admin():
+                d.pop("username", None)
+                d.pop("password", None)
+                d.pop("url_intern", None)
+                d.pop("port_onvif", None)
+            return d
+
         def write_cameras(setCameras = False):
             if setCameras:
-                self.write(dumps([obj.to_dict() for obj in settings.cameras]))
+                self.write(dumps([cam_dict(obj) for obj in settings.cameras]))
             else:
                 self.write(dumps({
                     "success": True,
-                    "cameras": [obj.to_dict() for obj in settings.cameras]
+                    "cameras": [cam_dict(obj) for obj in settings.cameras]
                 }))
+
+        # The camera-role user may do everything the camera app (camera.js) sends:
+        # get/goto presets, PTZ (moveStart/moveStop), live, get/setStreamPublish
+        # and reboot. Only actions that are NOT in camera.js are admin-only:
+        # setCameras (add cameras / IPs / ONVIF credentials) and setPresetLabel
+        # (rename a preset) -- both live in the admin settings screen.
+        if action in ("setCameras", "setPresetLabel"):
+            if self.login_required() and not self.current_user_is_admin():
+                self.write(dumps({"success": False, "error": "Geen rechten"}))
+                return
 
         if action == "getCameras":
             write_cameras()
             return
 
         elif action == "getPresets":
-            args = self.body_to_json()
-            cam = settings.cameras[args['id']]
             result = {
                 "err": None,
                 "msg": None,
                 "presets": []
             }
-            
+
             try:
-                cam.connect()
-                result['presets'] = [asdict(p) for p in cam.load_presets()]
+                args = self.body_to_json()
+                cam = settings.cameras[args['id']]
+                def _work():
+                    cam.connect()
+                    return [asdict(p) for p in cam.load_presets()]
+                result['presets'] = await _run_blocking(_work)
             except ConnectionError as err:
                 result['err'] = 'connection'
                 #result['msg'] = str(err)
@@ -401,20 +620,24 @@ class Camera(BaseHandler):
             return
 
         elif action == "getActivePreset":
+            # return proper JSON with a json content-type (F: was raw text/html)
+            self.set_header("Content-Type", "application/json")
             try:
                 args = self.body_to_json()
                 cam = settings.cameras[args['id']]
-                self.write( cam.active )
+                self.write(dumps(cam.active))
             except Exception as err:
-                self.write("err")
+                self.write(dumps(""))
 
         elif action == "gotoPreset":
             try:
                 args = self.body_to_json()
                 cam = settings.cameras[args['id']]
                 cam.active = str(args['preset'])
-                cam.goto_preset( cam.active )
-                settings.save()
+                def _work():
+                    cam.goto_preset(cam.active)
+                    settings.save()
+                await _run_blocking(_work)
                 result = {
                     "success": True
                 }
@@ -441,11 +664,10 @@ class Camera(BaseHandler):
                     "success": True
                 }
 
-            except Exception as err:
+            except Exception:
+                main_logger.exception("setPresetLabel failed")
                 result = {
                     "success": False,
-                    #"error": str(err),
-                    #"traceback": traceback.format_exc()
                 }
             self.write(dumps(result))
             return
@@ -454,7 +676,7 @@ class Camera(BaseHandler):
             try:
                 args = self.body_to_json()
                 cam = settings.cameras[args['id']]
-                live = cam.get_stream_uri()
+                live = await _run_blocking(cam.get_stream_uri)
                 result = {
                     "success": True,
                     "uri": live
@@ -473,8 +695,11 @@ class Camera(BaseHandler):
                 args = self.body_to_json()
                 cam = settings.cameras[args['id']]
                 cam.active = "0"
-                cam.set_focus_mode()
-                cam.move_direction(args["direction"])
+                direction = args["direction"]
+                def _work():
+                    cam.set_focus_mode()
+                    cam.move_direction(direction)
+                await _run_blocking(_work)
                 result = {
                     "success": True,
                 }
@@ -491,7 +716,7 @@ class Camera(BaseHandler):
                 args = self.body_to_json()
                 cam = settings.cameras[args['id']]
                 cam.active = "0"
-                cam.move_stop()
+                await _run_blocking(cam.move_stop)
                 result = {
                     "success": True,
                 }
@@ -515,7 +740,7 @@ class Camera(BaseHandler):
                 args = self.body_to_json()
                 cam = settings.cameras[args['id']]
                 result = {
-                    "success": cam.get_stream_publish()
+                    "success": await _run_blocking(cam.get_stream_publish)
                 }
             except Exception as err:
                 result = {
@@ -529,7 +754,8 @@ class Camera(BaseHandler):
             try:
                 args = self.body_to_json()
                 cam = settings.cameras[args['id']]
-                cam.set_stream_publish(args['publish'])
+                publish = args['publish']
+                await _run_blocking(lambda: cam.set_stream_publish(publish))
                 result = {
                     "success": True,
                 }
@@ -546,8 +772,10 @@ class Camera(BaseHandler):
                 args = self.body_to_json()
                 cam = settings.cameras[args['id']]
                 cam.active = "0"
-                settings.save()
-                cam.reboot()
+                def _work():
+                    settings.save()
+                    cam.reboot()
+                await _run_blocking(_work)
                 result = {
                     "success": True,
                 }
@@ -559,19 +787,38 @@ class Camera(BaseHandler):
             self.write(dumps(result))
             return
 
-class Psalmbord(tornado.web.RequestHandler):
-    def body_to_json(self):
-        body = self.request.body
-        if not body:
-            body = b"{}"
-        return json.loads(body)
-    
+class Psalmbord(BaseHandler):
+    def check_xsrf_cookie(self):
+        # The /psalmbord POST is read-only (returns board html/state only), so it
+        # is exempt from XSRF. This lets the kiosk board keep polling without a
+        # token (S5). State-changing endpoints (General/Login/Camera) stay protected.
+        pass
+
+    def psalmbord_login_required(self):
+        """The board is free on the internal listener (LAN kiosk screens reach
+        it without login); the external listener requires login. The remote_ip
+        plays no role here - trust for the board follows the port alone."""
+        return not self.application.settings.get("internal", False)
+
     def get_css(self):
-        fs = settings.pb.fontsize
-        fw = settings.pb.fontweight
+        # Coerce to int: fontsize/fontweight are int-cast on the setPsalmbord
+        # path, but a crafted settings *import* can store an arbitrary string.
+        # Forcing int here prevents breaking out of the inline <style> and
+        # injecting script on the public board (defense in depth for S3).
+        try:
+            fs = int(settings.pb.fontsize)
+        except (TypeError, ValueError):
+            fs = psalmbord.default_fontsize
+        try:
+            fw = int(settings.pb.fontweight)
+        except (TypeError, ValueError):
+            fw = psalmbord.default_fontweight
         return f"html {{ --regels: {fs}; }} \n .font_weight {{ font-weight: {fw}; }}"
 
     def get(self):
+        if self.psalmbord_login_required() and not self.logged_in():
+            self.redirect("/")
+            return
         if settings.settings.enable_psalmbord:
             self.render("psalmbord.html", css=self.get_css())
         else:
@@ -579,6 +826,10 @@ class Psalmbord(tornado.web.RequestHandler):
             self.write(html)
 
     def post(self):
+        if self.psalmbord_login_required() and not self.logged_in():
+            self.set_status(403)
+            self.write_login_exception()
+            return
         if settings.settings.enable_psalmbord:
             kwargs = self.body_to_json()
             if kwargs.get("html"):

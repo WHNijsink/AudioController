@@ -15,7 +15,7 @@ home.element.onclick = lambda evt: utils.redirect_relative("")
 
 
 def set_title(title):
-    home.inner_html(title)
+    home.text(title)
     window.document.title = title
 
 
@@ -185,6 +185,25 @@ async def check_logged_in():
         return logged_in
 
 
+async def enforce_change_if_needed():
+    """ If the server marks the logged-in user as must_change_password, force a
+    password change before the app can be used (forced change on first login). """
+    r = await utils.post(utils.get_url('login/login'), {})
+    if not r['success']:
+        return
+    must = ('must_change_password' in r) and r['must_change_password']
+    if not must:
+        return
+    username = r['username'] if 'username' in r else ''
+    while True:
+        newpw = await dialogs.dialog_change_password.get_new_password()
+        res = await utils.post(utils.get_url('login/setUser'),
+                               {'username': username, 'password': newpw})
+        if res['success']:
+            dialogs.dialog_change_password.hide()
+            return
+
+
 async def login():
     """ While not logged in, show login dialog. """
     nonlocal logged_in
@@ -205,6 +224,7 @@ async def login():
                     dialogs.dialog_login.show_login_failed(r['error'])
         except:
             await utils.sleep(0.1)
+    await enforce_change_if_needed()
 
 
 async def logout():

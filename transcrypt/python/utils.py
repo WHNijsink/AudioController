@@ -21,6 +21,16 @@ def get_url(path: str = ""):
     return "{}/{}".format(loc.origin, path)
 
 
+def _get_cookie(name):
+    """ Read a cookie value by name, or '' if absent. """
+    prefix = name + "="
+    for part in document.cookie.split(";"):
+        part = part.strip()
+        if part.startswith(prefix):
+            return decodeURIComponent(part[len(prefix):])
+    return ""
+
+
 def redirect_relative(path: str = ""):
     """ Redirect relative to the same origin, but other path """
     loc = window.location
@@ -97,6 +107,7 @@ async def post(url, data, json_parse=True, content_type=None):
         'success': success,
         'error': error,
         'contentType': _content_type,
+        'headers': {'X-Xsrftoken': _get_cookie('_xsrf')},
     })
 
     return deferred.promise()
@@ -151,7 +162,8 @@ async def post_upload_file(url, file, handle_progress=None):
         'cache': False,
         'contentType': False,
         'processData': False,
-        'timeout': 60000
+        'timeout': 60000,
+        'headers': {'X-Xsrftoken': _get_cookie('_xsrf')},
     })
 
     return deferred.promise()
@@ -163,6 +175,7 @@ async def post_download_file(url, data, filename, handle_progress=None):
 
     xhr = __new__(XMLHttpRequest())
     xhr.open('POST', url)
+    xhr.setRequestHeader('X-Xsrftoken', _get_cookie('_xsrf'))
     xhr.responseType = 'blob'
 
     if handle_progress is not None:

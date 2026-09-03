@@ -82,7 +82,7 @@ class ShellProcess():
 
         # read complete line (blocking)
         if not self.allow_user_input:
-            line = s.readline().decode().rstrip()
+            line = s.readline().decode(errors="replace").rstrip()
             if should_print and not line.startswith(_exit_line):
                 print(line)
                 sys.stdout.flush()
@@ -92,7 +92,7 @@ class ShellProcess():
         line = ""
         is_printing = False
         while s in r:
-            char = s.read(1).decode()
+            char = s.read(1).decode(errors="replace")
             if char == "\n":
                 if is_printing:
                     print(char, end=""); sys.stdout.flush()

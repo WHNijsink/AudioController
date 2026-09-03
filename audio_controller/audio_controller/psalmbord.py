@@ -11,6 +11,7 @@ from . import fonts, settings
 
 # external libs
 import tornado.web
+from tornado.escape import xhtml_escape
 
 
 #
@@ -47,12 +48,22 @@ class Psalmbord:
     def psalmbord_as_html(self) -> str:
         """ Create a html string to display the psalmbord in the browser """
 
-        regels = self.screens[self.active]["text"].splitlines()
+        # guard against an empty screen list or an out-of-range active index
+        if not self.screens or not (0 <= self.active < len(self.screens)):
+            return ""
+        # screens hold dicts when set via the SPA/json but PsalmbordScreen
+        # dataclasses when built by settings.restore(); accept both
+        screen = self.screens[self.active]
+        text = screen["text"] if isinstance(screen, dict) else screen.text
+        regels = text.splitlines()
 
         content = ""
         for r in regels:
             css = "regel font_weight"
-            css += f" {fonts.fonts[self.fontfamily]}"
+            # defensive: fall back to the default font class if an invalid
+            # fontfamily was ever persisted, so the public board cannot be
+            # DoS'd by a KeyError.
+            css += f" {fonts.fonts.get(self.fontfamily) or fonts.fonts[default_fontfamily]}"
             if r.startswith('_'):
                 css += " title"
                 r = r[1:]
@@ -65,7 +76,7 @@ class Psalmbord:
                 content += "<span class='col1'>"
                 for col1 in col[0].split(" "):
                     if col1.strip() != "":
-                        content += f"<span>{col1}</span>"
+                        content += f"<span>{xhtml_escape(col1)}</span>"
                 content += "</span>"
 
                 content += "<span class='col2'>:</span>"
@@ -73,13 +84,13 @@ class Psalmbord:
                 content += "<span class='col3'>"
                 for col3 in col[1].split(" "):
                     if col3.strip() != "":
-                        content += f"<span>{col3}</span>"
+                        content += f"<span>{xhtml_escape(col3)}</span>"
                 content += "</span>"
             else:
                 # regel without columns
                 """ replace optional ";" with ":" to prevent splitting and alignment """
                 regel_text = r.replace(";",":")
-                content += f"<span class='no-col'>{regel_text}</span>"
+                content += f"<span class='no-col'>{xhtml_escape(regel_text)}</span>"
             
             content += "</div>\n"
 
@@ -99,11 +110,15 @@ class Psalmbord:
             refreshrate = int(refreshrate)
         )
 
-        if not fonts.validate_font_name(self.fontfamily, True):
+        # Validate the INCOMING values (temp), not the already-stored self.*
+        # (which are always valid, making the check a no-op). Reject the update
+        # if a font value is outside the allowlist, so an invalid fontfamily can
+        # never reach the board CSS class / camera-page font-family.
+        if not fonts.validate_font_name(temp.fontfamily):
             return None
-        if not fonts.validate_font_size(self.fontsize, True):
+        if not fonts.validate_font_size(temp.fontsize):
             return None
-        if not fonts.validate_font_weight(self.fontweight, True):
+        if not fonts.validate_font_weight(temp.fontweight):
             return None
 
         self.fontfamily = temp.fontfamily
