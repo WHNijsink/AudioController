@@ -37,6 +37,10 @@ def find_onvif_wsdl_dir(package_dir: str | None = None, prefix: str | None = Non
 # None -> geef de onvif-zeep default door, zodat de foutmelding het ontbrekende pad noemt
 ONVIF_WSDL_DIR = find_onvif_wsdl_dir() or os.path.join(os.path.dirname(os.path.dirname(onvif.__file__)), "wsdl")
 
+# camera-preset die niet in het bedieningspaneel getoond wordt (home-positie)
+HOME_PRESET_TOKEN = "0"
+
+
 @dataclass
 class Preset:
     token: str
@@ -166,6 +170,11 @@ class Camera:
         for p in camera_presets:
 
             token = str(p.token)
+
+            # Preset 0 is de home-positie van de camera; die hoort niet in
+            # het bedieningspaneel (wel bereikbaar via goto_preset("0")).
+            if token == HOME_PRESET_TOKEN:
+                continue
 
             # Gebruik de naam van de camera indien aanwezig
             label = getattr(p, "Name", "") or ""
