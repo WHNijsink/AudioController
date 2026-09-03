@@ -1,6 +1,7 @@
 #!/bin/bash
 # update_pi.sh - AudioController op een van de Pi's bijwerken/beheren vanaf deze checkout.
-# Update volgt README stap 3 (rsync i.p.v. scp) en stap 4 (service herstarten/herinstalleren).
+# Update volgt README stap 2.3 (dependencies in de venv, nu via setup.py install_requires),
+# stap 3 (rsync i.p.v. scp) en stap 4 (service herstarten/herinstalleren).
 # LET OP: bevat interne deploy-details (hostnames/IP/poort/users) van de gergem-locaties.
 # Alleen op de eigen fork bewaren; niet naar de publieke upstream (ArjenGuis) pushen.
 #
@@ -13,6 +14,8 @@
 #   ./update_pi.sh west --full         volledige deploy: alle bestanden + systemd-unit (her)installeren
 #   ./update_pi.sh west --backup       alleen backup: download de huidige Pi-bestanden naar een lokaal mapje
 #   ./update_pi.sh west --no-backup    sla de automatische pre-deploy backup over
+#   ./update_pi.sh west --deps         alleen venv-dependencies (her)installeren via setup.py (geen sync)
+#   ./update_pi.sh west --no-deps      sla de dependency-installatie bij update/full over
 #   ./update_pi.sh west --health       snelle HTTP-healthcheck (wijzigt niets)
 #   ./update_pi.sh west --status       software/systeem-status van de Pi (wijzigt niets)
 #   ./update_pi.sh west --logs         laatste service-logregels (wijzigt niets)
@@ -26,6 +29,13 @@
 # naar $BACKUP_DIR/<locatie>/<datum-tijd>/ voordat er iets wordt overschreven (te
 # omzeilen met --no-backup). Elke backup krijgt een eigen datum-tijd-submap, dus ze
 # stapelen en je houdt er meerdere. --backup doet alleen dat downloaden, zonder te pushen.
+# Dependencies: update en volledige deploy draaien na de sync `pip install --editable
+# ./audio_controller` in de venv (~/AudioController/pyenv) op de Pi, zodat de runtime-
+# dependencies uit setup.py (install_requires: tornado, python-socketio, pyserial,
+# python-decouple, onvif-zeep, requests) altijd aanwezig zijn. Ontbreekt de venv, dan
+# wordt hij aangemaakt. Vereist internet op de Pi; met --no-deps sla je dit over.
+# De optionele GPIO-packages (gpiozero, rpi.gpio; README stap 2.3) blijven handwerk.
+#
 # Naast ~/AudioController/ gaat ook de config uit de home-map mee, in de submap home/:
 # ~/.audio_controller_settings.json (settings/sources/destinations/psalmbord/cameras/users),
 # ~/.audio_controller_settings.pickle (legacy, pre-1.5.0), ~/.audio_controller_users.txt
@@ -38,7 +48,7 @@
 #   ./audio_controller.service  -> ~/AudioController    (alleen geactiveerd bij --full)
 #   ./audio_controller.html     -> ~/Desktop            (kiosk-launcher)
 # Niet meegesynct: vendored assets (bootstrap*/fontawesome*) - die staan al op de Pi en
-# wijzigen niet; en *.pyc/__pycache__/.pytest_cache/.DS_Store.
+# wijzigen niet; en *.pyc/__pycache__/.pytest_cache/*.egg-info/.DS_Store.
 set -eo pipefail
 cd "$(dirname "$0")"
 
@@ -75,11 +85,12 @@ fi
 
 # --- argumenten ---
 LOC=""
-ACTIE=""        # update | full | backup | health | status | logs | restart
+ACTIE=""        # update | full | backup | deps | health | status | logs | restart
 DRY_RUN=""
 RESTART=1
 ASSUME_YES=0
 DO_BACKUP=1     # update/full downloaden altijd eerst de huidige Pi-bestanden
+DO_DEPS=1       # update/full installeren na de sync de dependencies uit setup.py
 for arg in "$@"; do
     case "$arg" in
         --dry-run)    ACTIE="update"; DRY_RUN="-n" ;;
@@ -88,6 +99,8 @@ for arg in "$@"; do
         --yes)        [ -z "$ACTIE" ] && ACTIE="update"; ASSUME_YES=1 ;;
         --full)       ACTIE="full" ;;
         --backup)     ACTIE="backup" ;;
+        --deps)       ACTIE="deps" ;;
+        --no-deps)    DO_DEPS=0 ;;
         --health)     ACTIE="health" ;;
         --status)     ACTIE="status" ;;
         --logs)       ACTIE="logs" ;;
@@ -134,28 +147,30 @@ if [ -z "$ACTIE" ]; then
     if [ -t 0 ]; then
         echo
         echo "${BOLD}Actie voor $LOC${RESET} ${DIM}$DOEL${RESET}"
-        echo "  1) update             ${DIM}backup + sync alle bestanden + service-herstart${RESET}"
+        echo "  1) update             ${DIM}backup + sync alle bestanden + deps + service-herstart${RESET}"
         echo "  2) dry-run            ${DIM}toon wat update zou wijzigen, verandert niets${RESET}"
         echo "  3) update zonder herstart"
-        echo "  4) volledige deploy   ${DIM}backup + alles + systemd-unit (her)installeren (stap 4)${RESET}"
+        echo "  4) volledige deploy   ${DIM}backup + alles + deps + systemd-unit (her)installeren (stap 4)${RESET}"
         echo "  5) backup             ${DIM}download huidige Pi-bestanden lokaal, zonder te pushen${RESET}"
-        echo "  6) healthcheck        ${DIM}snelle HTTP-check, wijzigt niets${RESET}"
-        echo "  7) status             ${DIM}versie, service, uptime, schijf, temperatuur${RESET}"
-        echo "  8) logs               ${DIM}laatste 40 regels van de service${RESET}"
-        echo "  9) herstart service   ${DIM}geen sync, alleen systemctl restart${RESET}"
+        echo "  6) dependencies       ${DIM}venv-deps uit setup.py (her)installeren, geen sync (stap 2.3)${RESET}"
+        echo "  7) healthcheck        ${DIM}snelle HTTP-check, wijzigt niets${RESET}"
+        echo "  8) status             ${DIM}versie, service, uptime, schijf, temperatuur${RESET}"
+        echo "  9) logs               ${DIM}laatste 40 regels van de service${RESET}"
+        echo " 10) herstart service   ${DIM}geen sync, alleen systemctl restart${RESET}"
         echo "  q) stoppen"
         while true; do
-            read -r -p "Keuze [1-9, q]: " k
+            read -r -p "Keuze [1-10, q]: " k
             case "$k" in
                 1) ACTIE="update"; break ;;
                 2) ACTIE="update"; DRY_RUN="-n"; break ;;
                 3) ACTIE="update"; RESTART=0; break ;;
                 4) ACTIE="full"; break ;;
                 5) ACTIE="backup"; break ;;
-                6) ACTIE="health"; break ;;
-                7) ACTIE="status"; break ;;
-                8) ACTIE="logs"; break ;;
-                9) ACTIE="restart"; break ;;
+                6) ACTIE="deps"; break ;;
+                7) ACTIE="health"; break ;;
+                8) ACTIE="status"; break ;;
+                9) ACTIE="logs"; break ;;
+                10) ACTIE="restart"; break ;;
                 q|Q) echo "Gestopt."; exit 0 ;;
             esac
         done
@@ -204,7 +219,7 @@ sync_files() {
     # shellcheck disable=SC2086
     rsync -rvzt $dry \
         --exclude="fontawesome*" --exclude="bootstrap*" \
-        --exclude="*.pyc" --exclude="__pycache__" --exclude=".pytest_cache" \
+        --exclude="*.pyc" --exclude="__pycache__" --exclude=".pytest_cache" --exclude="*.egg-info" \
         --exclude=".DS_Store" \
         -e "$ssh_cmd" \
         ./audio_controller ./run_audio_controller.sh ./audio_controller.service \
@@ -234,7 +249,7 @@ do_backup() {
     # shellcheck disable=SC2086
     if rsync -rzt \
         --exclude="pyenv" --exclude="fontawesome*" --exclude="bootstrap*" \
-        --exclude="*.pyc" --exclude="__pycache__" --exclude=".pytest_cache" \
+        --exclude="*.pyc" --exclude="__pycache__" --exclude=".pytest_cache" --exclude="*.egg-info" \
         -e "$ssh_cmd" \
         "$PI_USER@$PI_HOST:~/AudioController/" "$dest/" \
     && rsync -dzt \
@@ -259,10 +274,46 @@ do_backup() {
     fi
 }
 
+install_deps() {
+    # README stap 2.3, maar via setup.py: `pip install --editable ./audio_controller`
+    # in de venv op de Pi installeert de install_requires (tornado, python-socketio,
+    # pyserial, python-decouple, onvif-zeep, requests). Editable, net als in
+    # create_venv.sh: run_audio_controller.sh draait uit de broncode-map, dus er komt
+    # geen kopie in site-packages die na een rsync achter zou lopen. Ontbreekt de venv
+    # (bijv. nieuwe Pi, of onvif ModuleNotFoundError omdat het systeem-python werd
+    # gebruikt), dan wordt hij aangemaakt. Draait als de Pi-user; de service (root)
+    # kan de venv gewoon lezen.
+    echo "-- dependencies: venv + pip install --editable ./audio_controller (stap 2.3)"
+    "${SSH[@]}" '
+        set -e
+        cd ~/AudioController
+        if [ ! -x pyenv/bin/python ]; then
+            echo "   venv ontbreekt: python3 -m venv pyenv"
+            python3 -m venv pyenv
+        fi
+        echo "   venv: $(pyenv/bin/python --version 2>&1) in $(pwd)/pyenv"
+        pyenv/bin/python -m pip install --quiet --upgrade pip
+        pyenv/bin/python -m pip install --quiet --editable ./audio_controller
+        echo "   geinstalleerd:"
+        pyenv/bin/python -m pip list --format=columns 2>/dev/null \
+            | grep -i -E "^(audio[-_]controller|tornado|python-socketio|pyserial|python-decouple|onvif-zeep|requests|gpiozero|RPi\.GPIO) " \
+            | sed "s/^/     /"
+        pyenv/bin/python -m pip check >/dev/null 2>&1 && echo "   pip check: ok" || echo "   pip check: WAARSCHUWING, conflicterende versies (zie: pyenv/bin/python -m pip check)"
+        pyenv/bin/python -c "import tornado, socketio, serial, decouple, onvif, requests" \
+            && echo "   import-test: ok"
+    '
+}
+
 case "$ACTIE" in
 
     backup)
         do_backup
+        ;;
+
+    deps)
+        bevestig "Dependencies (her)installeren in de venv op $DOEL?"
+        install_deps
+        echo "Let op: de service is niet herstart; gebruik --restart als nieuwe packages actief moeten worden."
         ;;
 
     health)
@@ -307,6 +358,7 @@ case "$ACTIE" in
             echo "Dry-run klaar - er is niets gewijzigd op de Pi."
             exit 0
         fi
+        [ "$DO_DEPS" -eq 1 ] && install_deps || echo "-- dependencies overgeslagen (--no-deps)"
         echo "Let op: audio_controller.service is meegekopieerd maar niet geactiveerd."
         echo "        Gebruik 'volledige deploy' (--full) als de systemd-unit is gewijzigd."
         if [ "$RESTART" -eq 1 ]; then
@@ -325,6 +377,7 @@ case "$ACTIE" in
         bevestig "Volledige deploy naar $DOEL?"
         [ "$DO_BACKUP" -eq 1 ] && do_backup || echo "-- backup overgeslagen (--no-backup)"
         sync_files ""
+        [ "$DO_DEPS" -eq 1 ] && install_deps || echo "-- dependencies overgeslagen (--no-deps)"
         echo "-- systemd-unit (her)installeren + herstarten (stap 4)"
         "${SSH[@]}" "
             set -e
