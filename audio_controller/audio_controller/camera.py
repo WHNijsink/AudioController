@@ -1,13 +1,41 @@
 from __future__ import annotations  # PEP 604 'X | None' hints on Python 3.9 (documented 3.7+)
 from typing import Any
 from dataclasses import dataclass, field, asdict, is_dataclass
+import onvif
 from onvif import ONVIFCamera
 from urllib.parse import urlparse
+import glob
 import json
+import os
 import requests
 import socket
+import sys
 
 from . import settings
+
+
+def find_onvif_wsdl_dir(package_dir: str | None = None, prefix: str | None = None) -> str | None:
+    """Map met de ONVIF wsdl-bestanden van onvif-zeep, of None als die ontbreekt.
+
+    ONVIFCamera zoekt standaard in <site-packages>/wsdl naast het onvif-package.
+    De onvif-zeep wheel zet die bestanden echter onder een vaste
+    lib/python3.4/site-packages/wsdl in de venv, ongeacht de Python-versie
+    (gezien op de Pi met Python 3.7). Kijk daarom eerst naast het package en
+    val dan terug op elke lib/python*/site-packages/wsdl onder de venv-prefix.
+    """
+    package_dir = package_dir or os.path.dirname(onvif.__file__)
+    prefix = prefix or sys.prefix
+    candidates = [os.path.join(os.path.dirname(package_dir), "wsdl")]
+    candidates += sorted(glob.glob(os.path.join(prefix, "lib", "python*", "site-packages", "wsdl")))
+    candidates.append(os.path.join(prefix, "wsdl"))
+    for d in candidates:
+        if os.path.isfile(os.path.join(d, "devicemgmt.wsdl")):
+            return d
+    return None
+
+
+# None -> geef de onvif-zeep default door, zodat de foutmelding het ontbrekende pad noemt
+ONVIF_WSDL_DIR = find_onvif_wsdl_dir() or os.path.join(os.path.dirname(os.path.dirname(onvif.__file__)), "wsdl")
 
 @dataclass
 class Preset:
@@ -66,6 +94,7 @@ class Camera:
                 self.port_onvif,
                 self.username,
                 self.password,
+                ONVIF_WSDL_DIR,
             )
 
             self._media = self._cam.create_media_service()
@@ -101,6 +130,16 @@ class Camera:
         data["config_presets"] = [
             Preset(**p) for p in data.get("config_presets", [])
         ]
+
+        # Oudere opslag (en de admin-UI) leveren poorten als string; maak er
+        # int van als dat kan. Onherstelbare waarden blijven staan zodat het
+        # laden van de complete config er niet op stukloopt; update_cameras
+        # (settings.validate_camera_attribute) weigert ze wel bij opslaan.
+        for key in ("port_http", "port_onvif", "port_ws"):
+            try:
+                data[key] = int(str(data[key]).strip())
+            except (KeyError, TypeError, ValueError):
+                pass
 
         return cls(**data)
 
@@ -210,7 +249,7 @@ class Camera:
                 self.port_onvif,
                 self.username,
                 self.password,
-                settings.ONVIF_WSDL_DIR,
+                ONVIF_WSDL_DIR,
             )
 
             device = cam.create_devicemgmt_service()

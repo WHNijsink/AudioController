@@ -444,9 +444,22 @@ def validate_destination_attribute(name: str, value):
         return None
 
 
+_CAMERA_PORT_ATTRIBUTES = ("port_http", "port_onvif", "port_ws")
+
+
 def validate_camera_attribute(name: str, value):
     """ Validate value for attribute with name of a Camera object.
-    Return value, or adjusted value, or None if it is not valid. """
+    Return value, or adjusted value. Raise ValueError for an invalid port.
+    Ports arrive from the admin UI as strings; store them as int (1-65535)
+    so a typo or an empty field cannot end up in the connection URL. """
+    if name in _CAMERA_PORT_ATTRIBUTES:
+        try:
+            port = int(str(value).strip())
+        except (TypeError, ValueError):
+            raise ValueError(f"camera {name}: geen geldig poortnummer: {value!r}") from None
+        if not 1 <= port <= 65535:
+            raise ValueError(f"camera {name}: poort buiten bereik 1-65535: {port}")
+        return port
     try:
         if name == 'name':
             return value[0:50]  # max 50 characters
