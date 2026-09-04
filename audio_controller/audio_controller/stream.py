@@ -16,6 +16,16 @@ main_logger = logging.getLogger("main")
 
 _BITRATE_RE = re.compile(r"^[0-9]+[KkMm]?$")
 
+# Matches the "user:pass@" userinfo in a scheme://user:pass@host url (S-M1).
+_URL_USERINFO_RE = re.compile(r"(://)[^/@\s]+@")
+
+
+def redact_credentials(command):
+    """Return a copy of an ffmpeg argv list with any 'user:pass@' userinfo in a
+    url masked, so a logged command never leaks icecast/source credentials (S-M1).
+    The host and path are kept, which is what you actually want when debugging."""
+    return [_URL_USERINFO_RE.sub(r"\1***@", str(arg)) for arg in command]
+
 
 def sanitize_bitrate(raw: str) -> str:
     """Return raw if it is a plain ffmpeg bitrate (e.g. '64K'), else the safe default '64K' (S1)."""
@@ -66,13 +76,13 @@ def execute_ffmpeg(command, queue: Queue, testing=False):
 
     def create_process():
         nonlocal proc
-        print_info(f"execute_ffmpeg create_process: {command}")
+        print_info(f"execute_ffmpeg create_process: {redact_credentials(command)}")
         proc = Popen(command, stdin=None, stdout=out, stderr=out, cwd=None, bufsize=0)
 
     create_process()
 
     def stop():
-        print_info(f"execute_ffmpeg stop: {command}")
+        print_info(f"execute_ffmpeg stop: {redact_credentials(command)}")
         proc.terminate()
         try:
             proc.wait(timeout=5)  # C4: don't block forever if ffmpeg ignores SIGTERM
@@ -94,7 +104,7 @@ def execute_ffmpeg(command, queue: Queue, testing=False):
             # check if process is stopped (by accident)
             is_running = proc.poll() is None
             if not is_running:
-                print_info(f"execute_ffmpeg stopped unexpectedly: {command}")
+                print_info(f"execute_ffmpeg stopped unexpectedly: {redact_credentials(command)}")
                 create_process()
                 time.sleep(sleeptime)  # do not try to create process too many times
 

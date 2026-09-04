@@ -1,6 +1,21 @@
 from audio_controller import stream
 
 
+def test_redact_credentials_masks_userinfo_in_url():
+    # S-M1: the icecast destination url carries source credentials; the ffmpeg
+    # command is logged, so the password must be masked before it reaches a log.
+    cmd = ["ffmpeg", "-i", "in", "icecast://source:s3cret@host:8000/mount;128k"]
+    red = stream.redact_credentials(cmd)
+    assert "s3cret" not in " ".join(red)
+    assert "source" not in " ".join(red)   # username masked too
+    assert "host:8000/mount" in " ".join(red)  # non-secret parts kept for debugging
+
+
+def test_redact_credentials_leaves_plain_urls_untouched():
+    cmd = ["ffmpeg", "-i", "http://meeluisteren.example.nl:8000/west", "-f", "alsa", "d"]
+    assert stream.redact_credentials(cmd) == cmd
+
+
 def test_sanitize_bitrate_valid():
     assert stream.sanitize_bitrate("64K") == "64K"
     assert stream.sanitize_bitrate("128k") == "128k"
