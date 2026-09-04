@@ -5,6 +5,7 @@ import json
 from json import dumps
 from typing import List
 from dataclasses import dataclass, field, asdict
+import hashlib
 
 # internals
 from . import fonts, settings
@@ -40,6 +41,7 @@ class Psalmbord:
     active: int = 1 # if 0, show empty screen (not to confuse with enable_psalmbord)
     screens: List[PsalmbordScreen] = field(default_factory=list)
     refreshrate: int = 10
+    html_hash: str = ""
 
     #
     # Generate HTML
@@ -127,6 +129,9 @@ class Psalmbord:
         self.active = temp.active
         self.screens = temp.screens
         self.refreshrate = temp.refreshrate
+
+        content = self.screens[self.active]["text"]
+        self.html_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
 
         settings.save()
         return self
