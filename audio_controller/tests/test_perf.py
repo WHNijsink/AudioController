@@ -25,6 +25,29 @@ def test_auto_switch_interval_never_zero_even_for_bad_stored_value():
     assert controller.auto_switch_interval_seconds(15) == 15 * 60
 
 
+class TestKioskPageIsLean(AsyncHTTPTestCase):
+    def get_app(self):
+        return appmod.make_app(internal=True)  # kiosk reaches the board without login
+
+    def setUp(self):
+        super().setUp()
+        settings.restore()
+        settings.settings.enable_psalmbord = True
+
+    def test_kiosk_page_drops_unused_libraries(self):
+        # P4: the board's inline script uses only jQuery core; jQuery-UI, the
+        # Bootstrap css+bundle, FontAwesome and bootstrap-toggle were ~750 KB of
+        # dead weight loaded on a low-power kiosk. They must no longer be linked.
+        body = self.fetch("/psalmbord", method="GET").body.decode()
+        for dead in ("jquery-ui", "bootstrap-4.1.3-dist", "fontawesome", "bootstrap-toggle"):
+            self.assertNotIn(dead, body, f"kiosk page still loads {dead}")
+
+    def test_kiosk_page_keeps_what_it_uses(self):
+        body = self.fetch("/psalmbord", method="GET").body.decode()
+        self.assertIn("jquery-3.3.1.min.js", body)  # jQuery core is used ($.ajax etc.)
+        self.assertIn("psalmbord.css", body)
+
+
 class TestStaticCachingAndCompression(AsyncHTTPTestCase):
     def get_app(self):
         return appmod.make_app(internal=False)
