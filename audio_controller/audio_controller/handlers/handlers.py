@@ -24,7 +24,7 @@ import tornado.ioloop
 # import tornado.websocket
 
 # internals
-from audio_controller import settings, controller, user, loggers, gpio, psalmbord, __version__
+from audio_controller import settings, controller, user, loggers, gpio, psalmbord, fonts, __version__
 
 here = Path(os.path.dirname(__file__)).resolve()
 main_logger = logging.getLogger("main")
@@ -587,10 +587,12 @@ class CameraApp(tornado.web.RequestHandler):
         self.xsrf_token
 
     def get(self):
-        if settings.settings.enable_psalmbord:
+        # font-family is rendered into a <style> block on this unauthenticated
+        # page; only an allowlisted font name may pass, otherwise a stored bad
+        # value could inject CSS. Fall back to a safe default. (S-M7)
+        font = 'Segoe UI'
+        if settings.settings.enable_psalmbord and fonts.validate_font_name(settings.pb.fontfamily):
             font = settings.pb.fontfamily
-        else:
-            font = 'Segoe UI'
 
         if settings.settings.enable_camera:
             self.render("camera.html", title=settings.settings.title, font=font)

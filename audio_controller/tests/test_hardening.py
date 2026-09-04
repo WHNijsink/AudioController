@@ -113,6 +113,19 @@ class Hardening(AsyncHTTPTestCase):
         self.assertEqual(after["version"], before)   # version untouched
         self.assertEqual(after["title"], "Changed")  # other fields still update
 
+    def test_camera_page_font_cannot_inject_css(self):
+        # S-M7: /camera is an unauthenticated GET that renders pb.fontfamily into
+        # a <style> block (font-family: {{font}}). A non-allowlisted value must
+        # be replaced by a safe fallback so it cannot inject CSS rules.
+        settings.settings.enable_camera = True
+        settings.settings.enable_psalmbord = True
+        settings.pb.fontfamily = "x} body{background:red} .a{"
+        r = self.fetch("/camera", method="GET")
+        self.assertEqual(r.code, 200)
+        body = r.body.decode()
+        self.assertNotIn("background:red", body)
+        self.assertNotIn("x} body", body)
+
     def test_internal_host_stream_urls_rejected(self):
         assert settings.validate_source_attribute("port_url", "http://127.0.0.1:8000/x") is None
         assert settings.validate_source_attribute("port_url", "http://192.168.1.5/x") is None
