@@ -381,6 +381,11 @@ do_backup() {
         exit 1
     fi
     mkdir -p "$dest/home"
+    # De backup bevat geheimen: het cookie-ondertekengeheim
+    # (.audio_controller_cookie.txt) en de settings met wachtwoord-hashes en
+    # camera/icecast-credentials. Houd de hele backupboom eigenaar-only, anders
+    # kan een andere gebruiker op deze laptop admin-cookies vervalsen (S-M3).
+    chmod 700 "$BACKUP_DIR" "$BACKUP_DIR/$LOC" "$dest" "$dest/home" 2>/dev/null || true
     echo "-- backup: download huidige bestanden van $DOEL"
     echo "           -> $dest"
     echo "           config van service-user $svc_user uit $svc_home/ -> home/"
@@ -390,12 +395,12 @@ do_backup() {
     # een ontbrekend bestand (bijv. de legacy pickle) geen fout geeft; --rsync-path met
     # sudo omdat /root/ niet leesbaar is voor de ssh-user.
     # shellcheck disable=SC2086
-    if rsync -rzt \
+    if rsync -rzt --chmod=D700,F600 \
         --exclude="pyenv" --exclude="fontawesome*" --exclude="bootstrap*" \
         --exclude="*.pyc" --exclude="__pycache__" --exclude=".pytest_cache" --exclude="*.egg-info" \
         -e "$ssh_cmd" \
         "$PI_USER@$PI_HOST:~/AudioController/" "$dest/" \
-    && rsync -dzt --rsync-path="sudo -n rsync" \
+    && rsync -dzt --chmod=D700,F600 --rsync-path="sudo -n rsync" \
         --include=".audio_controller_*" --exclude="*" \
         -e "$ssh_cmd" \
         "$PI_USER@$PI_HOST:$svc_home/" "$dest/home/"; then
