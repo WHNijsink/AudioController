@@ -83,6 +83,17 @@ class Hardening(AsyncHTTPTestCase):
         self.assertFalse(resp.get("success"))
         self.assertIn("error", resp)
 
+    def test_lockout_key_is_per_client_not_per_username(self):
+        # S-M5: keying the lockout on the attacker-supplied username lets anyone
+        # lock the admin account (a remote DoS). Key on the client address so two
+        # usernames from the same client share a bucket, while the same username
+        # from two clients does not.
+        same_client_a = H._lockout_key("admin", "203.0.113.9")
+        same_client_b = H._lockout_key("someone-else", "203.0.113.9")
+        other_client = H._lockout_key("admin", "198.51.100.4")
+        self.assertEqual(same_client_a, same_client_b)
+        self.assertNotEqual(same_client_a, other_client)
+
     def test_setuser_rejects_weak_passwords(self):
         t, ck = self._prime()
         auth, _ = self._login("cam", "CamPw", t, ck, referer="http://x/camera")

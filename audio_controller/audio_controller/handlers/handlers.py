@@ -101,6 +101,13 @@ def _login_reset(username):
     _login_failures.pop(username, None)
 
 
+def _lockout_key(username, remote_ip):
+    """Throttle key for a login attempt. Keyed on the client address, NOT the
+    (attacker-supplied) username, so a flood of failures for `admin` cannot lock
+    the real admin out from a different client (remote DoS). (S-M5)"""
+    return remote_ip or "unknown"
+
+
 class BaseHandler(tornado.web.RequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -265,6 +272,12 @@ class Login(BaseHandler):
                     usr.password = user.hash_password(password)
                     settings.save()
                 return usr
+            return False
+        # No such username. Verify against a fixed dummy hash so an unknown user
+        # costs the same PBKDF2 work as a real one and timing cannot enumerate
+        # usernames. (S-M5)
+        if password is not None:
+            user.verify_password(password, user.DUMMY_HASH)
         return False
 
     async def post(self):
@@ -315,16 +328,18 @@ class Login(BaseHandler):
             # if 'username' in args and 'password' in args:
             username = str(args.get("username"))
             password = str(args.get("password"))
-            # brute-force throttling on the external port (E)
-            if self.login_required() and _login_locked(username):
-                msg = f"Login temporarily locked for user {username}"
+            # brute-force throttling on the external port, keyed on the client
+            # address so it cannot be abused to lock the admin account (E, S-M5)
+            lock_key = _lockout_key(username, self.request.remote_ip)
+            if self.login_required() and _login_locked(lock_key):
+                msg = f"Login temporarily locked for client {self.request.remote_ip}"
                 print(msg)
                 main_logger.info(msg)
                 self.write(dumps({"success": False,
                                   "error": "Te veel mislukte pogingen, probeer het later opnieuw"}))
                 return
             if self.check_user(username, password):
-                _login_reset(username)
+                _login_reset(lock_key)
                 msg = f"Login user {username}"
                 print(msg)
                 main_logger.info(msg)
@@ -333,7 +348,7 @@ class Login(BaseHandler):
                 self.write(dumps({"success": True,
                                   "must_change_password": bool(usr and usr.must_change_password)}))
             else:
-                _login_record_failure(username)
+                _login_record_failure(lock_key)
                 msg = f"Login failed for user {username}"
                 print(msg)
                 main_logger.info(msg)

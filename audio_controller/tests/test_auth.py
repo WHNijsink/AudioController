@@ -22,6 +22,15 @@ def test_new_hash_is_not_flagged_legacy():
     assert not user.is_legacy_hash(user.hash_password("x"))
 
 
+def test_dummy_hash_is_real_pbkdf2_and_never_verifies():
+    # S-M5: to flatten login timing between existing and non-existing usernames,
+    # the handler verifies an unknown user's password against this dummy hash. It
+    # must be a genuine (slow) pbkdf2 record that no password can satisfy.
+    assert user.DUMMY_HASH.startswith("pbkdf2_sha256$")
+    assert user.verify_password("anything", user.DUMMY_HASH) is False
+    assert user.verify_password("", user.DUMMY_HASH) is False
+
+
 def test_default_admin_must_change_password():
     users = user.default_users()
     admin = [u for u in users if u.username == "admin"]

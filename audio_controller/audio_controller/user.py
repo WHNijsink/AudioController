@@ -66,6 +66,12 @@ def hash_password(password: str) -> str:
     return f"pbkdf2_sha256${_PBKDF2_ROUNDS}${salt.hex()}${dk.hex()}"
 
 
+# A fixed, unsatisfiable pbkdf2 record. Verifying an unknown user's password
+# against this runs the same slow hash as a real user, so response timing does
+# not reveal whether a username exists (S-M5, enumeration resistance).
+DUMMY_HASH = hash_password(os.urandom(16).hex())
+
+
 def is_legacy_hash(stored: str) -> bool:
     """ True if the stored password is an old unsalted blake2b hex hash. """
     return not str(stored).startswith("pbkdf2_sha256$")
