@@ -62,6 +62,8 @@ def make_app(internal: bool = False):
         template_path=str(template_dir),
         internal=internal,
         xsrf_cookies=True,
+        # gzip the large JS/CSS/HTML payloads; big win on the Pi's wifi (P3)
+        compress_response=True,
     )
 
     sio = socketio.AsyncServer(async_mode="tornado")

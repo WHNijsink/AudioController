@@ -233,8 +233,11 @@ def get_js_filename():
 
 class StaticFileHandler(tornado.web.StaticFileHandler):
     def set_extra_headers(self, path):
-        # Disable cache
-        self.set_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        # Allow the browser to cache but always revalidate (P2). Tornado sends an
+        # ETag and answers a matching If-None-Match with 304/0 bytes, so an
+        # unchanged asset is not re-downloaded. main-<ts>.js is already
+        # content-addressed, so a stale bundle is never served after an update.
+        self.set_header("Cache-Control", "no-cache")
 
 
 class Main(BaseHandler):
