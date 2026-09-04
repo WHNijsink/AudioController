@@ -112,3 +112,35 @@ class TestLocalNoLogin(_Base):
         r = self.fetch("/psalmbord", method="POST", body=json.dumps({"html": True}),
                        headers={"Content-Type": "application/json"})
         self.assertEqual(r.code, 200)
+
+    def test_setusers_requires_login_even_on_local_port(self):
+        # S-H1: account management is a privilege-escalation / persistence vector,
+        # so it must require login even on the trusted loopback listener. An
+        # unauthenticated local process must not be able to plant an admin.
+        token, cookie = self._prime_xsrf()
+        before = [u.username for u in settings.users]
+        r = self._post("/login/setUsers",
+                       {"users": [{"username": "backdoor", "password": "x",
+                                   "admin": True, "camera": True}]},
+                       token=token, cookie=cookie)
+        self.assertEqual(r.code, 200)
+        self.assertEqual(json.loads(r.body).get("success"), False)
+        self.assertEqual([u.username for u in settings.users], before)
+
+    def test_restore_settings_requires_login_even_on_local_port(self):
+        # S-H1: restoreSettings resets every account back to admin/admin; it must
+        # not be reachable without login on the loopback listener.
+        settings.settings.title = "KeepMe"
+        token, cookie = self._prime_xsrf()
+        r = self._post("/general/restoreSettings", {}, token=token, cookie=cookie)
+        self.assertEqual(r.code, 200)
+        self.assertEqual(json.loads(r.body).get("success"), False)
+        self.assertEqual(settings.settings.title, "KeepMe")
+
+    def test_download_settings_requires_login_even_on_local_port(self):
+        # S-H1: the settings blob carries password hashes and cleartext camera /
+        # icecast credentials; downloading it must require login.
+        token, cookie = self._prime_xsrf()
+        r = self._post("/general/downloadSettings", {}, token=token, cookie=cookie)
+        self.assertEqual(r.code, 200)
+        self.assertEqual(json.loads(r.body).get("success"), False)

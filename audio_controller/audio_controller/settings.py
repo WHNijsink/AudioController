@@ -308,8 +308,23 @@ def set_binary(obj):
     # check some required attributes (not all, because some appeared after upgrades)
     if not all(field in store for field in 'settings sources destinations'.split()):
         return
+    _sanitize_uploaded_users(store)
     use_from_store(store)
     save()
+
+
+def _sanitize_uploaded_users(store: dict):
+    """Never trust password fields from an uploaded settings file (S-H1). A
+    genuine backup stores salted pbkdf2 hashes, which are kept as-is; anything
+    else (plaintext, or a bare legacy blake2b hash an attacker could craft into a
+    known-password account) is re-hashed so it cannot serve as a working
+    credential the uploader chose."""
+    for obj in store.get('users', []):
+        if not isinstance(obj, dict):
+            continue
+        pw = obj.get('password', '')
+        if user.is_legacy_hash(pw):  # not already salted pbkdf2 -> plaintext or legacy
+            obj['password'] = user.hash_password(pw)
 
 
 #

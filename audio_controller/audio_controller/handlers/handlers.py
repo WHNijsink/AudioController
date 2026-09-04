@@ -46,6 +46,16 @@ async def _run_blocking(func):
         raise
 
 
+# Actions that manage accounts or move the whole settings blob (with its
+# password hashes and cleartext camera/icecast credentials). These are the
+# privilege-escalation, persistence and secret-exfiltration vectors, so they
+# require login + admin even on the trusted loopback listener, where ordinary
+# operator actions (routing, psalmbord, camera control) stay open. (S-H1)
+_AUTH_ALWAYS_GENERAL = frozenset(
+    {"uploadSettings", "downloadSettings", "restoreSettings", "downloadLog"}
+)
+_AUTH_ALWAYS_LOGIN = frozenset({"setUsers", "getUsers", "setUser"})
+
 _LOCAL_HOSTNAMES = ("localhost", "127.0.0.1", "::1", "ip6-localhost")
 
 
@@ -263,16 +273,17 @@ class Login(BaseHandler):
         # User administration must not be reachable without authentication (S8).
         # login / logout / login_required stay open; the rest needs login, and
         # listing or modifying users needs admin.
-        if action in ("setUsers", "getUsers", "setUser"):
-            if self.login_required() and not self.logged_in():
+        if action in _AUTH_ALWAYS_LOGIN:
+            # account management always needs login, even on the loopback port (S-H1)
+            if not self.logged_in():
                 self.write(dumps({"success": False, "LoginException": "Please login first"}))
                 return
             if action in ("setUsers", "getUsers"):
                 me = self.get_user(self.current_user) if self.current_user else False
-                if self.login_required() and (me is False or not me.admin):
+                if me is False or not me.admin:
                     self.write(dumps({"success": False, "error": "Geen rechten"}))
                     return
-                if self.login_required() and self.must_change_password():
+                if self.must_change_password():
                     self.write(dumps({"success": False, "must_change_password": True}))
                     return
 
@@ -398,17 +409,21 @@ class General(BaseHandler):
     async def post(self):
         action = get_action(self.request.path)
 
-        if self.login_required() and not self.logged_in():
+        # Account/whole-config actions require login even on the trusted loopback
+        # listener (S-H1); ordinary operator actions keep the local no-login trust.
+        force_auth = action in _AUTH_ALWAYS_GENERAL
+
+        if (self.login_required() or force_auth) and not self.logged_in():
             self.write(dumps({"success": False}))
             return
 
         # system/config actions are admin-only; a camera-only session must not
         # reboot, change routing or upload settings (privilege escalation) (S9)
-        if self.login_required() and not self.current_user_is_admin():
+        if (self.login_required() or force_auth) and not self.current_user_is_admin():
             self.write(dumps({"success": False, "error": "Geen rechten"}))
             return
 
-        if self.login_required() and self.must_change_password():
+        if (self.login_required() or force_auth) and self.must_change_password():
             self.write(dumps({"success": False, "must_change_password": True}))
             return
 
