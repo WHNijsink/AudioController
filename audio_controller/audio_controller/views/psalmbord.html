@@ -40,8 +40,10 @@
             interval = result["refreshrate"]*1000 // milliseconds
             css.html(result["css"])
             container.html(result["html"])
-            if(firstAlignment){
-                setTimeout(alignment, 200 )
+            if(firstAlignment && interval > 2000){
+                // de eerste keer de alignment vertragen, zodat pagina volledig geladen is
+                // dit is alleen zinvol als de ingestelde interval >2sec is
+                setTimeout(alignment, 2000 )
             } else {
                 alignment()
             }
