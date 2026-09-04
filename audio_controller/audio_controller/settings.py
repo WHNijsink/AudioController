@@ -5,6 +5,7 @@ import json
 import logging
 import threading
 import ipaddress
+import re
 from urllib.parse import urlparse
 from typing import List
 from pathlib import Path
@@ -451,12 +452,43 @@ def validate_destination_attribute(name: str, value):
 
 _CAMERA_PORT_ATTRIBUTES = ("port_http", "port_onvif", "port_ws")
 
+# A bare hostname (letters/digits/hyphen labels), used for camera url_intern.
+_HOSTNAME_RE = re.compile(
+    r"^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,62})(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}))*$"
+)
+
+
+def _validate_camera_host(value):
+    """Validate a camera url_intern: a bare hostname or IPv4/IPv6 literal that is
+    spliced into http://{url_intern}/ajaxcom and used for ONVIF (S-M4). Cameras
+    live on the private LAN, so private IPs stay valid; loopback/link-local/
+    reserved are blocked so the field cannot be aimed at the Pi's own services,
+    and scheme/path/port/userinfo are rejected to stop url injection."""
+    host = str(value).strip()
+    if not host or "://" in host or any(c in host for c in "/@ \t?#\\"):
+        raise ValueError(f"camera url_intern: ongeldige host: {value!r}")
+    ip = None
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        ip = None
+    if ip is not None:
+        if (ip.is_loopback or ip.is_link_local or ip.is_reserved
+                or ip.is_unspecified or ip.is_multicast):
+            raise ValueError(f"camera url_intern: adres niet toegestaan: {host}")
+        return host
+    if _HOSTNAME_RE.match(host):
+        return host
+    raise ValueError(f"camera url_intern: ongeldige host: {value!r}")
+
 
 def validate_camera_attribute(name: str, value):
     """ Validate value for attribute with name of a Camera object.
     Return value, or adjusted value. Raise ValueError for an invalid port.
     Ports arrive from the admin UI as strings; store them as int (1-65535)
     so a typo or an empty field cannot end up in the connection URL. """
+    if name == 'url_intern':
+        return _validate_camera_host(value)
     if name in _CAMERA_PORT_ATTRIBUTES:
         try:
             port = int(str(value).strip())

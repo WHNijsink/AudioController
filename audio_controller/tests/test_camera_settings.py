@@ -36,6 +36,36 @@ def test_invalid_port_is_rejected_and_cameras_unchanged(tmp_settings_file, bad):
     assert [c.name for c in settings.cameras] == ["Bestaand"]
 
 
+@pytest.mark.parametrize("host", ["192.168.1.9", "10.0.0.5", "172.16.0.4", "camera-kerk.local"])
+def test_url_intern_accepts_lan_hosts(host):
+    # S-M4: cameras live on the private LAN, so private IPs and plain hostnames
+    # must stay valid; only a bare host/IP is allowed (it is spliced into
+    # http://{url_intern}/ajaxcom).
+    assert settings.validate_camera_attribute("url_intern", host) == host
+
+
+@pytest.mark.parametrize("bad", [
+    "127.0.0.1",                       # loopback -> could hit the app's own ports
+    "::1",
+    "169.254.1.1",                     # link-local
+    "127.0.0.1:5000/general/reboot",   # port/path injection into the url
+    "evil.example/path",               # path injection
+    "http://192.168.1.9",              # scheme injection
+    "192.168.1.9 --arg",               # whitespace
+    "a@b",                             # userinfo
+])
+def test_url_intern_rejects_ssrf_and_injection(bad):
+    with pytest.raises(ValueError):
+        settings.validate_camera_attribute("url_intern", bad)
+
+
+def test_setting_ssrf_url_intern_leaves_cameras_unchanged(tmp_settings_file):
+    settings.update_cameras([_cam(url_intern="10.0.0.5")])
+    with pytest.raises(ValueError):
+        settings.update_cameras([_cam(url_intern="127.0.0.1")])
+    assert settings.cameras[0].url_intern == "10.0.0.5"  # prior config kept
+
+
 def test_validate_camera_port_attribute_casts_and_bounds():
     assert settings.validate_camera_attribute("port_http", "8080") == 8080
     assert settings.validate_camera_attribute("port_ws", 65535) == 65535
