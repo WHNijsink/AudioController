@@ -27,6 +27,7 @@
     let interval = 10000 // milliseconds
     let hasFailed = false
     let firstAlignment = true
+    let html_hash = ""
 
     function success(response) {
         let result = JSON.parse(response)
@@ -35,9 +36,14 @@
         } else {
             interval = result["refreshrate"]*1000 // milliseconds
             css.html(result["css"])
-            container.html(result["html"])
-            if(firstAlignment){
-                setTimeout(alignment, 200 )
+            if(result["html_hash"] !== undefined){
+                html_hash = result["html_hash"]
+                container.html(result["html"])
+            }
+            if(firstAlignment && interval > 2000){
+                // de eerste keer de alignment vertragen, zodat pagina volledig geladen is
+                // dit is alleen zinvol als de ingestelde interval >2sec is
+                setTimeout(alignment, 2000 )
             } else {
                 alignment()
             }
@@ -54,7 +60,7 @@
         $.ajax({
             type: "POST",
             url: url,
-            data: JSON.stringify({ html: true }),
+            data: JSON.stringify({ html: true, html_hash: html_hash }),
             success: success,
             error: error,
             contentType: "application/json; charset=utf-8",

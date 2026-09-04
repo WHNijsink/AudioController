@@ -54,8 +54,8 @@ class Settings(AccordionItem):
         input_enable_camera = E("input").attr("class", "form-control").attr("type", "checkbox")
         input_enable_logging = E("input").attr("class", "form-control").attr("type", "checkbox")
 
-        width_1 = "col-sm-5 col-md-3"
-        width_2 = "col-sm-3 col-md-2"
+        width_1 = "col-sm-5 col-md-4 col-lg-3"
+        width_2 = "col-sm-5 col-md-4 col-lg-2"
         self.body.append(
             E("div")
             .attr("class", "form-group row")
@@ -496,9 +496,12 @@ class Cameras(AccordionItem):
         plist.add_column("name", "Naam").item_to_element(text_element.bind(None, "name"))
         plist.add_column("url_intern", "Interne IP").item_to_element(text_element.bind(None, "url_intern"))
         plist.add_column("url_extern", "Externe URL").item_to_element(text_element.bind(None, "url_extern"))
-        plist.add_column("port_http", ":HTTP").item_to_element(number_element.bind(None, "port_http"))
-        plist.add_column("port_onvif", ":ONVIF").item_to_element(number_element.bind(None, "port_onvif"))
-        plist.add_column("port_ws", ":WS").item_to_element(number_element.bind(None, "port_ws"))
+        # ONVIF gebruikt de Pi zelf, via de interne IP; HTTP en WS gebruikt de
+        # browser, via de externe URL. Vul bij HTTP dus de router-forward poort 
+        # van de camera in, om de webinterface van de camera van buiten te benaderen
+        plist.add_column("port_http", ":HTTP (extern)").item_to_element(number_element.bind(None, "port_http"))
+        plist.add_column("port_onvif", ":ONVIF (intern)").item_to_element(number_element.bind(None, "port_onvif"))
+        plist.add_column("port_ws", ":WS (extern)").item_to_element(number_element.bind(None, "port_ws"))
         plist.add_column("username", "Gebruikersnaam").item_to_element(text_element.bind(None, "username"))
         plist.add_column("password", "Wachtwoord").item_to_element(password_element.bind(None, "password"))
 

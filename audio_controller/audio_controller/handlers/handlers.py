@@ -892,12 +892,19 @@ class Psalmbord(BaseHandler):
         if settings.settings.enable_psalmbord:
             kwargs = self.body_to_json()
             if kwargs.get("html"):
-                result = {
-                    "html": settings.pb.psalmbord_as_html(),
-                    "css": self.get_css(),
-                    "active": settings.pb.active,
-                    "refreshrate": settings.pb.refreshrate
-                }
+                if kwargs.get("html_hash") != settings.pb.html_hash:
+                    result = {
+                        "html": settings.pb.psalmbord_as_html(),
+                        "html_hash": settings.pb.html_hash,
+                        "css": self.get_css(),
+                        "refreshrate": settings.pb.refreshrate
+                    }
+                else:
+                    result = {
+                        "css": self.get_css(),
+                        "refreshrate": settings.pb.refreshrate
+                    }
+                
                 self.write(dumps(result))
             else:
                 self.write(dumps(asdict(settings.pb)))

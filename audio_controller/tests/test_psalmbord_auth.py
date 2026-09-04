@@ -74,7 +74,9 @@ class ExternalPsalmbordTest(_PsalmbordBase):
                        headers={"Cookie": self._login_cookie()})
         self.assertEqual(r.code, 200)
         result = json.loads(r.body)
-        for key in ("html", "css", "active"):
+        # Guis f9e284c changed the poll contract: a first poll (no html_hash sent)
+        # returns the full board plus its content hash; "active" was removed.
+        for key in ("html", "html_hash", "css", "refreshrate"):
             self.assertIn(key, result)
 
 
@@ -90,5 +92,20 @@ class InternalPsalmbordTest(_PsalmbordBase):
         r = self.fetch("/psalmbord", method="POST", body='{"html": true}')
         self.assertEqual(r.code, 200)
         result = json.loads(r.body)
-        for key in ("html", "css", "active"):
+        # Guis f9e284c changed the poll contract: a first poll (no html_hash sent)
+        # returns the full board plus its content hash; "active" was removed.
+        for key in ("html", "html_hash", "css", "refreshrate"):
             self.assertIn(key, result)
+
+    def test_post_with_matching_hash_skips_html(self):
+        # Guis f9e284c: once the kiosk echoes back the current content hash, the
+        # server omits the (large) html and returns only css + refreshrate.
+        first = json.loads(self.fetch("/psalmbord", method="POST",
+                                      body='{"html": true}').body)
+        h = first["html_hash"]
+        second = json.loads(self.fetch(
+            "/psalmbord", method="POST",
+            body=json.dumps({"html": True, "html_hash": h})).body)
+        self.assertNotIn("html", second)          # unchanged -> not resent
+        self.assertIn("css", second)
+        self.assertIn("refreshrate", second)

@@ -105,8 +105,8 @@ class Page(ElementWrapper):
         # show output frame
         screen_div = E('div').attr('class','row')
         screen_div.append(
-            E('div').attr('style', 'float: left; width: 270px;').append(
-                E('iframe').attr('src', '/psalmbord').attr('style', 'width: 270px; height: 480px; border: none;')
+            E('div').attr('style', 'float: left; width: 203px;').append(
+                E('iframe').attr('src', '/psalmbord').attr('style', 'width: 203px; height: 360px; border: none;')
             )
         )
 

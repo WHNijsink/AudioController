@@ -1,13 +1,45 @@
 from __future__ import annotations  # PEP 604 'X | None' hints on Python 3.9 (documented 3.7+)
 from typing import Any
 from dataclasses import dataclass, field, asdict, is_dataclass
+import onvif
 from onvif import ONVIFCamera
 from urllib.parse import urlparse
+import glob
 import json
+import os
 import requests
 import socket
+import sys
 
 from . import settings
+
+
+def find_onvif_wsdl_dir(package_dir: str | None = None, prefix: str | None = None) -> str | None:
+    """Map met de ONVIF wsdl-bestanden van onvif-zeep, of None als die ontbreekt.
+
+    ONVIFCamera zoekt standaard in <site-packages>/wsdl naast het onvif-package.
+    De onvif-zeep wheel zet die bestanden echter onder een vaste
+    lib/python3.4/site-packages/wsdl in de venv, ongeacht de Python-versie
+    (gezien op de Pi met Python 3.7). Kijk daarom eerst naast het package en
+    val dan terug op elke lib/python*/site-packages/wsdl onder de venv-prefix.
+    """
+    package_dir = package_dir or os.path.dirname(onvif.__file__)
+    prefix = prefix or sys.prefix
+    candidates = [os.path.join(os.path.dirname(package_dir), "wsdl")]
+    candidates += sorted(glob.glob(os.path.join(prefix, "lib", "python*", "site-packages", "wsdl")))
+    candidates.append(os.path.join(prefix, "wsdl"))
+    for d in candidates:
+        if os.path.isfile(os.path.join(d, "devicemgmt.wsdl")):
+            return d
+    return None
+
+
+# None -> geef de onvif-zeep default door, zodat de foutmelding het ontbrekende pad noemt
+ONVIF_WSDL_DIR = find_onvif_wsdl_dir() or os.path.join(os.path.dirname(os.path.dirname(onvif.__file__)), "wsdl")
+
+# camera-preset die niet in het bedieningspaneel getoond wordt (home-positie)
+HOME_PRESET_TOKEN = "0"
+
 
 @dataclass
 class Preset:
@@ -66,6 +98,7 @@ class Camera:
                 self.port_onvif,
                 self.username,
                 self.password,
+                ONVIF_WSDL_DIR,
             )
 
             self._media = self._cam.create_media_service()
@@ -102,6 +135,16 @@ class Camera:
             Preset(**p) for p in data.get("config_presets", [])
         ]
 
+        # Oudere opslag (en de admin-UI) leveren poorten als string; maak er
+        # int van als dat kan. Onherstelbare waarden blijven staan zodat het
+        # laden van de complete config er niet op stukloopt; update_cameras
+        # (settings.validate_camera_attribute) weigert ze wel bij opslaan.
+        for key in ("port_http", "port_onvif", "port_ws"):
+            try:
+                data[key] = int(str(data[key]).strip())
+            except (KeyError, TypeError, ValueError):
+                pass
+
         return cls(**data)
 
     def get_config_preset(self, token: str) -> Preset | None:
@@ -127,6 +170,11 @@ class Camera:
         for p in camera_presets:
 
             token = str(p.token)
+
+            # Preset 0 is de home-positie van de camera; die hoort niet in
+            # het bedieningspaneel (wel bereikbaar via goto_preset("0")).
+            if token == HOME_PRESET_TOKEN:
+                continue
 
             # Gebruik de naam van de camera indien aanwezig
             label = getattr(p, "Name", "") or ""
@@ -210,7 +258,7 @@ class Camera:
                 self.port_onvif,
                 self.username,
                 self.password,
-                settings.ONVIF_WSDL_DIR,
+                ONVIF_WSDL_DIR,
             )
 
             device = cam.create_devicemgmt_service()
@@ -295,7 +343,7 @@ class Camera:
             Het gedecodeerde JSON-antwoord.
         """
 
-        url = f"http://{self.url_intern}:{self.port_http}/ajaxcom"
+        url = f"http://{self.url_intern}/ajaxcom"
 
         response = requests.post(
             url,
@@ -353,44 +401,6 @@ class Camera:
             }
         })
 
-    def is_http_available(self, timeout=2) -> bool:
-        try:
-            url = f"http://{self.url_intern}:{self.port_http}/"
-
-            response = requests.get(
-                url,
-                auth=(self.username, self.password),
-                timeout=timeout,
-            )
-
-            return response.status_code < 500
-
-        except requests.RequestException:
-            return False
-
-    #
-    # COMMON
-    #
-
-    def port_open(self, port: int, timeout=1) -> bool:
-        try:
-            with socket.create_connection(
-                (self.url_intern, port),
-                timeout=timeout,
-            ):
-                return True
-
-        except OSError:
-            return False
-
-    def test_connection(self):
-
-        return {
-            "http_port": self.port_open(self.port_http),
-            "onvif_port": self.port_open(self.port_onvif),
-            "http": self.is_http_available(),
-            "onvif": self.is_onvif_available(),
-        }
 
 #
 # DEFAULT CAMERA'S

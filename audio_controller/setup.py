@@ -42,6 +42,23 @@ setuptools.setup(
     long_description_content_type="text/markdown",
     url="",
     packages=setuptools.find_packages(),
+    # Runtime dependencies. Build/dev-only tools (transcrypt, watchdog, pytest,
+    # pylint, black) are intentionally not listed here; create_venv.sh installs
+    # those. 'requests' is used directly (camera/SSRF checks) and no longer relies
+    # on being pulled in transitively by onvif-zeep.
+    # Pin secure floors with compatible ranges (S-M8). Lower bounds keep a fresh
+    # Pi build off known-vulnerable releases; upper bounds avoid a surprise major.
+    # The ranges stay Python 3.7-installable (the Pi): Tornado 6.2 is the last 3.7
+    # build, while a 3.9+ dev box resolves to 6.5.
+    install_requires=[
+        "tornado>=6.1,<7",
+        "python-socketio>=5.5,<6",
+        "python-engineio>=4.4,<5",
+        "pyserial>=3.5",
+        "python-decouple>=3.6",
+        "onvif-zeep>=0.2.12",
+        "requests>=2.31,<3",
+    ],
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",

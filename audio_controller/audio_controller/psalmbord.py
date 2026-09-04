@@ -5,6 +5,7 @@ import json
 from json import dumps
 from typing import List
 from dataclasses import dataclass, field, asdict
+import hashlib
 
 # internals
 from . import fonts, settings
@@ -40,6 +41,7 @@ class Psalmbord:
     active: int = 1 # if 0, show empty screen (not to confuse with enable_psalmbord)
     screens: List[PsalmbordScreen] = field(default_factory=list)
     refreshrate: int = 10
+    html_hash: str = ""
 
     #
     # Generate HTML
@@ -128,7 +130,24 @@ class Psalmbord:
         self.screens = temp.screens
         self.refreshrate = temp.refreshrate
 
+        self.refresh_html_hash()
+
         settings.save()
         return self
+
+    def _active_text(self) -> str:
+        """Text of the active screen, or '' if there is none. Handles both dict
+        and PsalmbordScreen entries and guards an out-of-range active index (the
+        same guard psalmbord_as_html uses)."""
+        if not self.screens or not (0 <= self.active < len(self.screens)):
+            return ""
+        screen = self.screens[self.active]
+        return screen["text"] if isinstance(screen, dict) else screen.text
+
+    def refresh_html_hash(self):
+        """Recompute the content hash used to skip unchanged board refreshes
+        (Guis f9e284c). Always a real sha256 (even of ''), so it never collides
+        with the client's initial empty hash and leaves the board blank."""
+        self.html_hash = hashlib.sha256(self._active_text().encode("utf-8")).hexdigest()
 
 

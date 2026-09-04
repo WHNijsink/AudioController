@@ -5,6 +5,7 @@ import json
 import logging
 import threading
 import ipaddress
+import re
 from urllib.parse import urlparse
 from typing import List
 from pathlib import Path
@@ -186,6 +187,11 @@ def upgrade(store: dict):
     if store['settings']['version'] == 9:
         store['settings']['version'] = 10
         store['settings']['enable_camera'] = False
+        # het oude bord-model (title + regels) is vervangen door screens; die
+        # sleutels moeten weg, anders faalt Psalmbord(**store['psalmbord']) en
+        # valt load() terug op defaults (alle instellingen kwijt)
+        store['psalmbord'].pop('title', None)
+        store['psalmbord'].pop('regels', None)
         store['psalmbord']['active'] = 1
         store['psalmbord']['screens'] = [
             psalmbord.PsalmbordScreen(index=i, text=text, size=8)
@@ -215,6 +221,10 @@ def use_from_store(store: dict):
     for obj in store["cameras"]: cameras.append(camera.Camera.from_dict(obj))
     for obj in store["users"]: users.append(user.User(**obj))
     pb.__init__(**store['psalmbord'])
+    # Recompute the board content hash after loading: an older store has no
+    # html_hash (default ""), which would collide with the kiosk's initial empty
+    # hash and leave the board blank until the first edit (Guis f9e284c).
+    pb.refresh_html_hash()
 
 
 def load():
@@ -461,9 +471,53 @@ def validate_destination_attribute(name: str, value):
         return None
 
 
+_CAMERA_PORT_ATTRIBUTES = ("port_http", "port_onvif", "port_ws")
+
+# A bare hostname (letters/digits/hyphen labels), used for camera url_intern.
+_HOSTNAME_RE = re.compile(
+    r"^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,62})(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}))*$"
+)
+
+
+def _validate_camera_host(value):
+    """Validate a camera url_intern: a bare hostname or IPv4/IPv6 literal that is
+    spliced into http://{url_intern}/ajaxcom and used for ONVIF (S-M4). Cameras
+    live on the private LAN, so private IPs stay valid; loopback/link-local/
+    reserved are blocked so the field cannot be aimed at the Pi's own services,
+    and scheme/path/port/userinfo are rejected to stop url injection."""
+    host = str(value).strip()
+    if not host or "://" in host or any(c in host for c in "/@ \t?#\\"):
+        raise ValueError(f"camera url_intern: ongeldige host: {value!r}")
+    ip = None
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        ip = None
+    if ip is not None:
+        if (ip.is_loopback or ip.is_link_local or ip.is_reserved
+                or ip.is_unspecified or ip.is_multicast):
+            raise ValueError(f"camera url_intern: adres niet toegestaan: {host}")
+        return host
+    if _HOSTNAME_RE.match(host):
+        return host
+    raise ValueError(f"camera url_intern: ongeldige host: {value!r}")
+
+
 def validate_camera_attribute(name: str, value):
     """ Validate value for attribute with name of a Camera object.
-    Return value, or adjusted value, or None if it is not valid. """
+    Return value, or adjusted value. Raise ValueError for an invalid port.
+    Ports arrive from the admin UI as strings; store them as int (1-65535)
+    so a typo or an empty field cannot end up in the connection URL. """
+    if name == 'url_intern':
+        return _validate_camera_host(value)
+    if name in _CAMERA_PORT_ATTRIBUTES:
+        try:
+            port = int(str(value).strip())
+        except (TypeError, ValueError):
+            raise ValueError(f"camera {name}: geen geldig poortnummer: {value!r}") from None
+        if not 1 <= port <= 65535:
+            raise ValueError(f"camera {name}: poort buiten bereik 1-65535: {port}")
+        return port
     try:
         if name == 'name':
             return value[0:50]  # max 50 characters
