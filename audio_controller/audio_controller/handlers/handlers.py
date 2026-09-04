@@ -46,6 +46,24 @@ async def _run_blocking(func):
         raise
 
 
+_LOCAL_HOSTNAMES = ("localhost", "127.0.0.1", "::1", "ip6-localhost")
+
+
+def _host_is_local(host):
+    """True if an HTTP Host header names a loopback address (S-M2). Strips an
+    optional :port and IPv6 brackets. Used only to confirm loopback trust, so it
+    fails closed for anything it cannot parse."""
+    if not host:
+        return False
+    host = host.strip()
+    # strip a trailing :port, but not the colons inside a bracketed IPv6 literal
+    if host.startswith("["):
+        host = host.split("]", 1)[0].lstrip("[")
+    else:
+        host = host.rsplit(":", 1)[0] if host.count(":") == 1 else host
+    return host.lower() in _LOCAL_HOSTNAMES
+
+
 # --- simple in-memory login throttling (E: brute-force hardening) ---
 # PBKDF2 already slows guessing; this adds a temporary lockout after repeated
 # failures. State is per-process (one process serves all ports); a successful
@@ -139,7 +157,13 @@ class BaseHandler(tornado.web.RequestHandler):
         gets the same login wall as the external port."""
         if not self.application.settings.get("internal", False):
             return False
-        return self.request.remote_ip in ("127.0.0.1", "::1", "::ffff:127.0.0.1")
+        if self.request.remote_ip not in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+            return False
+        # DNS-rebinding defence (S-M2): the kiosk browser runs on the Pi, so a
+        # page an attacker lures it to connects from a loopback peer but carries
+        # the attacker's Host header. Require the Host to be a loopback name too,
+        # so a rebound request (foreign Host) falls back to the login wall.
+        return _host_is_local(self.request.host)
 
     def write_login_exception(self):
         self.write(dumps({"LoginException": "Please login first"}))
