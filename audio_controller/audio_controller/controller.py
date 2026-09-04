@@ -195,12 +195,21 @@ async def scan_ports():
         await asyncio.sleep(2)
 
 
+def auto_switch_interval_seconds(timeout_minutes) -> int:
+    """Seconds between auto_switch passes, with a 1s floor so a zero timeout can
+    never turn the loop into a 100%-CPU busy loop. (P1)"""
+    try:
+        return max(1, int(timeout_minutes) * 60)
+    except (TypeError, ValueError):
+        return 60
+
+
 async def auto_switch():
     """
     Continuously check if a switch to another source is needed.
 
     """
-    interval_seconds = settings.settings.timeout_auto_switch * 60
+    interval_seconds = auto_switch_interval_seconds(settings.settings.timeout_auto_switch)
     while True:
         try:
             if settings.settings.enable_option_auto_switch and settings.settings.enable_auto_switch:

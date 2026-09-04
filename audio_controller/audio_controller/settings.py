@@ -415,7 +415,9 @@ def validate_settings(obj: Settings):
     # turn auto-switch off, if option is disabled
     if obj.enable_auto_switch and not obj.enable_option_auto_switch:
         obj.enable_auto_switch = False
-    obj.timeout_auto_switch = max(0, min(60 * 24, obj.timeout_auto_switch))
+    # at least 1 minute: 0 would make the auto_switch loop sleep(0) and spin the
+    # CPU at 100% (P1)
+    obj.timeout_auto_switch = max(1, min(60 * 24, obj.timeout_auto_switch))
     return True
 
 
