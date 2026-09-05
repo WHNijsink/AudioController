@@ -117,7 +117,7 @@ class DialogLogin(Dialog):
         self.input_username = E('input')
         self.input_password = E('input').attr('type', 'password')
 
-        self.alert = E('div').attr('class','alert alert-danger').attr('style','display:none')
+        self.alert = E('div').attr('class','alert alert-danger').attr('style','display:none').text("Gebruikersnaam en/of wachtwoord onbekend.")
 
         container.append(
             self.alert,
@@ -149,8 +149,8 @@ class DialogLogin(Dialog):
         self.show()
         return self.deferred.promise()
     
-    def show_login_failed(self, msg):
-        self.alert.inner_html(msg).attr('style','display:block')
+    def show_login_failed(self):
+        self.alert.attr('style','display:block')
 
 
 dialog_login = DialogLogin()

@@ -352,7 +352,6 @@ class Login(BaseHandler):
                 main_logger.info(msg)
                 self.write(dumps({
                     "success": False,
-                    #"error": msg
                 }))
 
         elif action == "logout":
