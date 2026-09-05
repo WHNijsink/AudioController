@@ -234,7 +234,7 @@ async def login():
                     dialogs.dialog_login.hide()
                     break
                 else:
-                    dialogs.dialog_login.show_login_failed(r['error'])
+                    dialogs.dialog_login.show_login_failed()
         except:
             await utils.sleep(0.1)
     await enforce_change_if_needed()
