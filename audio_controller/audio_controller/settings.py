@@ -661,7 +661,7 @@ def update_users(new_users: List[dict]):
 
         for obj in new_users:
             usr = user.User(**obj)
-            usr.username = validate_user_attribute("username", usr.username)
+            usr.username = validate_user_attribute("username", usr.username).strip()
             prior = existing.get(usr.username)
             incoming_pw = usr.password
 

@@ -324,7 +324,7 @@ class Login(BaseHandler):
             # else: try login if arguments are provided
             args = self.body_to_json()
             # if 'username' in args and 'password' in args:
-            username = str(args.get("username"))
+            username = str(args.get("username")).strip()
             password = str(args.get("password"))
             # brute-force throttling on the external port, keyed on the client
             # address so it cannot be abused to lock the admin account (E, S-M5)
