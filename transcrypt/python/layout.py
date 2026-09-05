@@ -271,7 +271,7 @@ async def ensure_admin_login():
             _add_logout_button_once()  # let them lock it again when done
             await enforce_change_if_needed()
             return True
-        dialogs.dialog_login.show_login_failed(r['error'])
+        dialogs.dialog_login.show_login_failed()
 
 
 async def logout():
