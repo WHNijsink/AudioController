@@ -68,6 +68,16 @@ class TestExternalAuth(_Base):
         self.assertEqual(r.code, 200)
         self.assertEqual(json.loads(r.body)["success"], False)
 
+    def test_account_actions_require_login_on_external_port(self):
+        # S8/S-H1: on the internet-facing port, account management and the whole
+        # settings blob need login (unlike the trusted loopback operator UI).
+        token, cookie = self._prime_xsrf()
+        for path in ("/login/getUsers", "/login/setUsers", "/general/downloadSettings",
+                     "/general/restoreSettings"):
+            r = self._post(path, {}, token=token, cookie=cookie)
+            self.assertEqual(r.code, 200, path)
+            self.assertEqual(json.loads(r.body).get("success"), False, path)
+
     def test_default_admin_login_forces_change_and_is_gated(self):
         token, cookie = self._prime_xsrf()
         # log in as the default admin (Referer required by check_app)
@@ -113,34 +123,29 @@ class TestLocalNoLogin(_Base):
                        headers={"Content-Type": "application/json"})
         self.assertEqual(r.code, 200)
 
-    def test_setusers_requires_login_even_on_local_port(self):
-        # S-H1: account management is a privilege-escalation / persistence vector,
-        # so it must require login even on the trusted loopback listener. An
-        # unauthenticated local process must not be able to plant an admin.
+    def test_getusers_returns_list_without_login_on_local_port(self):
+        # The loopback listener is the trusted local-operator UI (kiosk/touchscreen
+        # on the Pi): the settings page, incl. user management, works without login.
+        # getUsers must return a LIST here; returning a login-error dict crashes the
+        # SPA user grid ("self.data is not iterable") and bounces it to /login/.
         token, cookie = self._prime_xsrf()
-        before = [u.username for u in settings.users]
+        r = self._post("/login/getUsers", {}, token=token, cookie=cookie)
+        self.assertEqual(r.code, 200)
+        self.assertIsInstance(json.loads(r.body), list)
+
+    def test_setusers_works_without_login_on_local_port(self):
+        # The local operator may manage accounts from the Pi settings page.
+        token, cookie = self._prime_xsrf()
         r = self._post("/login/setUsers",
-                       {"users": [{"username": "backdoor", "password": "x",
+                       {"users": [{"username": "beheer", "password": "Sterk!wachtwoord9",
                                    "admin": True, "camera": True}]},
                        token=token, cookie=cookie)
         self.assertEqual(r.code, 200)
-        self.assertEqual(json.loads(r.body).get("success"), False)
-        self.assertEqual([u.username for u in settings.users], before)
+        self.assertIn("beheer", [u.username for u in settings.users])
 
-    def test_restore_settings_requires_login_even_on_local_port(self):
-        # S-H1: restoreSettings resets every account back to admin/admin; it must
-        # not be reachable without login on the loopback listener.
-        settings.settings.title = "KeepMe"
-        token, cookie = self._prime_xsrf()
-        r = self._post("/general/restoreSettings", {}, token=token, cookie=cookie)
-        self.assertEqual(r.code, 200)
-        self.assertEqual(json.loads(r.body).get("success"), False)
-        self.assertEqual(settings.settings.title, "KeepMe")
-
-    def test_download_settings_requires_login_even_on_local_port(self):
-        # S-H1: the settings blob carries password hashes and cleartext camera /
-        # icecast credentials; downloading it must require login.
+    def test_config_actions_reachable_without_login_on_local_port(self):
+        # restoreSettings / downloadSettings are part of the local operator UI too.
         token, cookie = self._prime_xsrf()
         r = self._post("/general/downloadSettings", {}, token=token, cookie=cookie)
         self.assertEqual(r.code, 200)
-        self.assertEqual(json.loads(r.body).get("success"), False)
+        self.assertNotEqual(json.loads(r.body).get("success"), False)

@@ -84,9 +84,10 @@ async def post(url, data, json_parse=True, content_type=None):
     def success(result):
         if json_parse:
             r = JSON.parse(result)
-            # If not logged in, redirect to home page
+            # Session no longer valid: reload the app so it re-runs the login flow.
+            # (Not "login/": there is no GET page there, that returns 405.)
             if r.hasOwnProperty('LoginException'):
-                redirect_relative("login/")
+                redirect_relative("")
             deferred.resolve(r)
         else:
             deferred.resolve(result)

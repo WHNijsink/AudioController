@@ -53,6 +53,7 @@ class MenuItem(ElementWrapper):
         self.attr('class', 'nav-item').append(self.title)
         menu_items.append(self)
         self.active = False
+        self.before_show = None  # optional async gate run before the page is shown
 
     def set_title(self, title):
         self.title.inner_html(title)
@@ -66,7 +67,13 @@ class MenuItem(ElementWrapper):
             self.element.classList.remove("active")
         return self
 
-    def onclick(self, evt):
+    async def onclick(self, evt):
+        # optional gate (e.g. admin login for Instellingen): only show the page if
+        # the gate returns True, so a cancelled login leaves the current tab.
+        if self.before_show is not None:
+            ok = await self.before_show()
+            if not ok:
+                return
         for mi in menu_items:
             mi.activate(False)
         self.activate(True)
@@ -75,6 +82,11 @@ class MenuItem(ElementWrapper):
     def set_page(self, page):
         self.page = page
         self.element.onclick = self.onclick
+        return self
+
+    def set_before_show(self, coro):
+        """Register an async () -> bool gate run before the page is shown."""
+        self.before_show = coro
         return self
 
 
@@ -155,6 +167,7 @@ async def create_main_menu():
         )
     main_menu.append(
         MenuItem().set_title("Instellingen").set_page(page_admin.Page())
+                  .set_before_show(ensure_admin_login)
     )
 
     login = await utils.post(utils.get_url('login/login_required'), {})
@@ -225,6 +238,40 @@ async def login():
         except:
             await utils.sleep(0.1)
     await enforce_change_if_needed()
+
+
+_logout_state = []  # non-empty once a logout button has been added to the menu
+
+
+def _add_logout_button_once():
+    if not _logout_state:
+        main_menu.append(logout_button())
+        _logout_state.append(True)
+
+
+async def ensure_admin_login():
+    """Gate for the Instellingen area: require an admin login even on the trusted
+    local port, so the operator (koster) does not change settings by accident.
+    Shows the login dialog; returns True once logged in, or False if the dialog
+    was cancelled (then the current tab stays)."""
+    nonlocal logged_in
+    if logged_in:
+        return True
+    while True:
+        try:
+            user = await dialogs.dialog_login.get_value()
+        except:
+            return False  # dialog closed/cancelled -> stay on the current tab
+        if user is None:
+            return False
+        r = await utils.post(utils.get_url('login/login'), user)
+        if r['success']:
+            logged_in = True
+            dialogs.dialog_login.hide()
+            _add_logout_button_once()  # let them lock it again when done
+            await enforce_change_if_needed()
+            return True
+        dialogs.dialog_login.show_login_failed(r['error'])
 
 
 async def logout():
