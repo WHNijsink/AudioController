@@ -256,7 +256,8 @@ class Login(BaseHandler):
     
     def get_user(self, username, password = None):
         for usr in settings.users:
-            if username != usr.username:
+            # check usernames case-insensitive
+            if username.lower() != usr.username.lower():
                 continue
             if password is None or user.verify_password(password, usr.password):
                 # transparently upgrade a legacy unsalted hash to a salted one on
@@ -337,12 +338,13 @@ class Login(BaseHandler):
                                   "error": "Te veel mislukte pogingen, probeer het later opnieuw"}))
                 return
             if self.check_user(username, password):
+                usr = self.get_user(username)
+                username = usr.username # seset username from storage, because login is not case-sensitive.
                 _login_reset(lock_key)
                 msg = f"Login user {username}"
                 print(msg)
                 main_logger.info(msg)
                 self.set_cookie_username(username)  # assumes unique usernames
-                usr = self.get_user(username)
                 self.write(dumps({"success": True,
                                   "must_change_password": bool(usr and usr.must_change_password)}))
             else:
